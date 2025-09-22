@@ -28,4 +28,4 @@ setup(
 )
 
 
-# TODO: SETUP inspire hand as well
+# TODO: SETUP inspire hand
