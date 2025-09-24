@@ -16,6 +16,13 @@
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
 
+#=============================================================================
+# in random_agent.py or train_with_rl_games.py BEFORE any registry lookups
+from legged_lab.envs.tutorials import h1_env
+
+#=============================================================================
+
+
 from legged_lab.envs.base.base_env import BaseEnv
 from legged_lab.envs.base.base_env_config import BaseAgentCfg, BaseEnvCfg
 from legged_lab.envs.tienkung.run_cfg import TienKungRunAgentCfg, TienKungRunFlatEnvCfg
@@ -42,3 +49,21 @@ task_registry.register(
 task_registry.register(
     "run_with_sensor", TienKungEnv, TienKungRunWithSensorFlatEnvCfg(), TienKungRunWithSensorAgentCfg()
 )
+
+
+# input("tiankung envs registered")
+# for tutorials
+import gymnasium as gym
+
+# Register the direct env (versioned ID recommended)
+gym.register(
+    id="Isaac-H1-Direct-v0",
+    entry_point="legged_lab.envs.tutorials.h1_env:H1Env",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "legged_lab.envs.tutorials.h1_env:H1EnvCfg",
+        # Use a valid module that contains rl_games_ppo_cfg.yaml
+        "rl_games_cfg_entry_point": "isaaclab_tasks.manager_based.classic.humanoid.agents:rl_games_ppo_cfg.yaml"
+    },
+)
+#=============================================================================

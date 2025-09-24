@@ -20,7 +20,7 @@ from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils import configclass
 from isaaclab.utils.math import sample_uniform
 
-
+# Direct RLEnv Config
 @configclass
 class CartpoleEnvCfg(DirectRLEnvCfg):
     # env
