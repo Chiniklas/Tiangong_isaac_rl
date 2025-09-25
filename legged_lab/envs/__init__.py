@@ -67,3 +67,18 @@ gym.register(
     },
 )
 #=============================================================================
+
+# register for the inspirehand env
+from legged_lab.envs.inspirehand.grasp_cfg import InspireHandEnvCfg, InspireHandEnv
+
+gym.register(
+    id="Isaac-InspireHand-Direct-v0",
+    entry_point="legged_lab.envs.inspirehand.grasp_cfg:InspireHandEnv",
+    disable_env_checker=True,
+    kwargs={
+        # Your env/cfg classes
+        "env_cfg_entry_point": "legged_lab.envs.inspirehand.grasp_cfg:InspireHandEnvCfg",
+        # Point to a valid rl_games PPO yaml (reuse the one you used for H1 or a minimal template)
+        "rl_games_cfg_entry_point": "isaaclab_tasks.manager_based.classic.humanoid.agents:rl_games_ppo_cfg.yaml",
+    },
+)
