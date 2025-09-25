@@ -106,7 +106,7 @@ class InspireHandEnvCfg(DirectRLEnvCfg):
 
     # put your scene **here**
     scene: InspireSceneCfg = InspireSceneCfg(
-        num_envs=1, env_spacing=2.0, replicate_physics=True, clone_in_fabric=True
+        num_envs=1, env_spacing=2.0, replicate_physics=True, clone_in_fabric= False
     )
 
 
