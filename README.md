@@ -1,41 +1,18 @@
-# TienKung-Lab: Direct IsaacLab Workflow for TienKung
+# Tiangong_isaac_rl: this is a forked repo for dexterous manipulation on top of the TienKung-Lab locomotion template
 
-[![IsaacSim](https://img.shields.io/badge/IsaacSim-4.5.0-silver.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)
-[![Isaac Lab](https://img.shields.io/badge/IsaacLab-2.1.0-silver)](https://isaac-sim.github.io/IsaacLab)
-[![RSL_RK](https://img.shields.io/badge/RSL_RL-2.3.1-silver)](https://github.com/leggedrobotics/rsl_rl)
-[![Python](https://img.shields.io/badge/python-3.10-blue.svg)](https://docs.python.org/3/whatsnew/3.10.html)
-[![Linux platform](https://img.shields.io/badge/platform-linux--64-orange.svg)](https://releases.ubuntu.com/22.04/)
-[![License](https://img.shields.io/badge/license-BSD--3-yellow.svg)](https://opensource.org/licenses/BSD-3-Clause)
-[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://pre-commit.com/)
-
-<div align="center">
-  <img src="docs/Tienkung_marathon.jpg" width="600">
-  <br>
-  <b><span style="font-size:1.2em;">TienKung humanoid robot won the championship in the first Humanoid Robot Half Marathon</span></b>
-  <br>
-</div>
-
-
-
-## Overview
-
-| Motion |              AMP Animation               |                     Sensors                      |                   RL + AMP                    |                   Sim2Sim                   |
-| :----: | :--------------------------------------: | :----------------------------------------------: | :-------------------------------------------: | :-----------------------------------------: |
-|  Walk  | <img src="docs/walk_amp.gif" width="200"> | <img src="docs/walk_with_sensor.gif" width="200"> | <img src="docs/walk_isaaclab.gif" width="200"> | <img src="docs/walk_mujoco.gif" width="200"> |
-|  Run   | <img src="docs/run_amp.gif" width="200">  | <img src="docs/run_with_sensor.gif" width="200">  | <img src="docs/run_isaaclab.gif" width="200">  | <img src="docs/run_mujoco.gif" width="200">  |
-
-This framework is an RL-based locomotion control system designed for full-sized humanoid robots, TienKung. It integrates AMP-style rewards with periodic gait rewards, facilitating natural, stable, and efficient walking and running behaviors.
-
-The codebase is built on IsaacLab, supports Sim2Sim transfer to MuJoCo, and features a modular architecture for seamless customization and extension. Additionally, it incorporates ray-casting-based sensors for enhanced perception, enabling precise environmental interaction and obstacle avoidance.
-
+## Current hardware setup
+- Tiangong2 pro version humanoid
+- two inspire-hands
+  
 ## TODO List
-- [ ] Add motion dataset for TienKung
-- [ ] Motion retargeting support
-- [ ] Add more sensors
-- [ ] Add Perceptive Control
+- [ ] transfer RL pipeline from Raisim to Isaacsim
+- [ ] train a working RL agent based on one object and one grasp primitive
+- [ ] add point cloud sensors for real time perception
+- [ ] run RL agents on real hardware
 
+# Basic usage and some modifications from the upstream template
 ## Installation
-TienKung-Lab is built with IsaacSim 4.5.0 and IsaacLab 2.1.0.
+TienKung-Lab is built with IsaacSim 4.5.0 and IsaacLab 2.1.0. **However**, since the tutorial for IsaacSim 4.5.0 has been depricated, our Tiangong_isaac_rl repo is built upon IsaacSim 5.0.0 AND Isaaclab 2.1.0. The installation is tested ok.
 
 - Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html). We recommend using the conda installation as it simplifies calling Python scripts from the terminal.
 
@@ -149,17 +126,23 @@ In some VsCode versions, the indexing of part of the extensions is missing. In t
 }
 ```
 
-## Acknowledgement
+## References:
 
-* [Legged Lab](https://github.com/Hellod035/LeggedLab): a direct IsaacLab Workflow for Legged Robots.
-* [Humanoid-Gym](https://github.com/roboterax/humanoid-gym):a reinforcement learning (RL) framework based on NVIDIA Isaac Gym, with Sim2Sim support.
-* [RSL RL](https://github.com/leggedrobotics/rsl_rl): a fast and simple implementation of RL algorithms.
-* [AMP_for_hardware](https://github.com/Alescontrela/AMP_for_hardware?tab=readme-ov-file): codebase for learning skills from short reference motions using Adversarial Motion Priors.
-* [Omni-Perception](https://acodedog.github.io/OmniPerceptionPages/): a perception library for legged robots, which provides a set of sensors and perception algorithms.
-* [Warp](https://github.com/NVIDIA/warp): a Python framework for writing high-performance simulation and graphics code.
+TODO
 
-## Discussions
-If you're interested in TienKung-Lab, welcome to join our WeChat group for discussions.
+# For our dex manipulation features:
+## env setup 
 
-<img src="./docs/qrcode.png" border=0 width=40%>
+## train agents
+
+## reward shaping
+
+## policy inference and visualization
+
+## sim2real
+
+## data recording
+
+## policy distillation
+
 
