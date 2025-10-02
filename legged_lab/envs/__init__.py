@@ -15,14 +15,6 @@
 # This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
-
-#=============================================================================
-# in random_agent.py or train_with_rl_games.py BEFORE any registry lookups
-from legged_lab.envs.tutorials import h1_env
-
-#=============================================================================
-
-
 from legged_lab.envs.base.base_env import BaseEnv
 from legged_lab.envs.base.base_env_config import BaseAgentCfg, BaseEnvCfg
 from legged_lab.envs.tienkung.run_cfg import TienKungRunAgentCfg, TienKungRunFlatEnvCfg
@@ -52,13 +44,15 @@ task_registry.register(
 
 
 # my envs
-from legged_lab.envs.inspirehand.grasp_env_cfg import InspireHandEnv, InspireHandEnvCfg
-from legged_lab.envs.inspirehand.grasp_agent_cfg import InspireHandGraspAgentCfg
+from legged_lab.envs.inspirehand.grasp_env import InspireHandGraspEnv
+from legged_lab.envs.inspirehand.grasp_cfg import (
+    InspireHandGraspEnvCfg,
+    InspireHandGraspAgentCfg,   # <— now coming from grasp_cfg.py
+)
 
-# Register InspireHand grasp task into the task_registry
 task_registry.register(
     "inspirehand_grasp",
-    InspireHandEnv,
-    InspireHandEnvCfg(),
-    InspireHandGraspAgentCfg()
+    InspireHandGraspEnv,
+    InspireHandGraspEnvCfg(),
+    InspireHandGraspAgentCfg(),
 )
