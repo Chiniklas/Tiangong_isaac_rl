@@ -16,89 +16,88 @@ class InspireHandGraspEnv(BaseEnv):
         # Always present
         self.hand = self.scene["robot"]
 
-        # Spawn table + object if not already in the scene
+        # Spawn table + object if missing
         self._spawn_table_and_object()
 
-        # Now they exist; keep handles
+        # Keep handles now that they exist
         self.table = self.scene["table"]
         self.obj = self.scene["object"]
 
         self._hold_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
-    # ---------- NEW: spawn helpers ----------
+    def _safe_has(self, name: str) -> bool:
+        """Return True if an entity can be retrieved by key, False if KeyError."""
+        try:
+            _ = self.scene[name]
+            return True
+        except KeyError:
+            return False
+
     def _spawn_table_and_object(self):
-        """Add a kinematic table and a dynamic cube to every env."""
-        # If already present (e.g., you add them later via config), skip.
-        names = set(self.scene.entity_names)
-        need_table = "table" not in names
-        need_object = "object" not in names
+        """Add a kinematic table and a dynamic cube to every env if they are not present."""
+        need_table = not self._safe_has("table")
+        need_object = not self._safe_has("object")
         if not (need_table or need_object):
             return
 
-        # Table (kinematic)
-        table_cfg = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/Table",
-            spawn=sim_utils.CuboidCfg(
-                size=(0.60, 0.60, 0.03),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    disable_gravity=True,
-                    kinematic_enabled=True,
-                    max_depenetration_velocity=3.0,
-                ),
-                mass_props=sim_utils.MassPropertiesCfg(mass=0.0),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.6, 0.6, 0.6), metallic=0.0, roughness=0.6
-                ),
-            ),
-            init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(0.50, 0.0, 0.70),  # z = table height
-                rot=(1.0, 0.0, 0.0, 0.0),
-            ),
-        )
-
-        # Grasp object (dynamic cube)
-        obj_cfg = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/Object",
-            spawn=sim_utils.CuboidCfg(
-                size=(0.05, 0.05, 0.10),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    disable_gravity=False,
-                    max_depenetration_velocity=3.0,
-                ),
-                mass_props=sim_utils.MassPropertiesCfg(mass=0.4),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.8, 0.3, 0.3), metallic=0.2, roughness=0.4
-                ),
-            ),
-            init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(0.55, 0.0, 0.73),  # slightly above table
-                rot=(1.0, 0.0, 0.0, 0.0),
-            ),
-        )
-
-        # Add to scene and (re)initialize their replicas across envs
         if need_table:
+            table_cfg = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Table",
+                spawn=sim_utils.CuboidCfg(
+                    size=(0.60, 0.60, 0.03),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        disable_gravity=True,
+                        kinematic_enabled=True,
+                        max_depenetration_velocity=3.0,
+                    ),
+                    mass_props=sim_utils.MassPropertiesCfg(mass=0.0),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.6, 0.6, 0.6), metallic=0.0, roughness=0.6
+                    ),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=(0.50, 0.0, 0.70),
+                    rot=(1.0, 0.0, 0.0, 0.0),
+                ),
+            )
             self.scene.add("table", table_cfg)
+
         if need_object:
+            obj_cfg = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Object",
+                spawn=sim_utils.CuboidCfg(
+                    size=(0.05, 0.05, 0.10),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        disable_gravity=False,
+                        max_depenetration_velocity=3.0,
+                    ),
+                    mass_props=sim_utils.MassPropertiesCfg(mass=0.4),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.8, 0.3, 0.3), metallic=0.2, roughness=0.4
+                    ),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=(0.55, 0.0, 0.73),
+                    rot=(1.0, 0.0, 0.0, 0.0),
+                ),
+            )
             self.scene.add("object", obj_cfg)
 
-        # Write to sim & do a forward so data handles become valid
+        # Make sure tensors are materialized
         self.scene.reset()
         self.scene.write_data_to_sim()
         self.sim.forward()
-    # ---------- end new ----------
 
-    # ------------------------ Observations ------------------------
+    # ----- rest of the class stays the same -----
+
     def compute_current_observations(self):
         q = self.hand.data.joint_pos
         dq = self.hand.data.joint_vel
-        palm_p = self.hand.data.root_pos_w  # simple palm proxy
-
+        palm_p = self.hand.data.root_pos_w
         obj_p = self.obj.data.root_pos_w
         rel_p = obj_p - palm_p
-
         actor_obs = torch.cat([q, dq, rel_p], dim=-1)
         critic_obs = actor_obs
         return actor_obs, critic_obs
@@ -107,7 +106,6 @@ class InspireHandGraspEnv(BaseEnv):
         actor_obs, critic_obs = self.compute_current_observations()
         return actor_obs, critic_obs
 
-    # ------------------------ Step / Rewards ------------------------
     def step(self, actions: torch.Tensor):
         obs, reward_buf, reset_buf, extras = super().step(actions)
         reward_buf = self._get_rewards()
