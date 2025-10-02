@@ -2,7 +2,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-INSPIRE_HAND_USD = "/home/chizhang/projects/Tiangong_isaac_rl/legged_lab/assets/handright9253/urdf/handright9253_simplified/handright9253_simplified.usd"
+INSPIRE_HAND_USD = "legged_lab/assets/handright9253/urdf/handright9253_simplified/handright9253_simplified.usd"
 
 INSPIRE_HAND_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",   # <-- match scene key "robot"

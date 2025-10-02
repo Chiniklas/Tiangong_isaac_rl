@@ -1,4 +1,5 @@
 from isaaclab.utils import configclass
+from isaaclab.assets import RigidObjectCfg
 from legged_lab.envs.base.base_config import (
     BaseSceneCfg,
     RobotCfg,
@@ -13,6 +14,7 @@ from legged_lab.envs.base.base_config import (
 )
 from legged_lab.envs.base.base_env_config import BaseAgentCfg
 from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG  # <-- your asset cfg
+import isaaclab.sim as sim_utils
 
 # -- empty reward config (we compute rewards in the env) --
 @configclass
@@ -26,15 +28,42 @@ class InspireHandEventCfg:
 
 @configclass
 class InspireHandGraspSceneCfg(BaseSceneCfg):
-    # BaseEnv expects these to exist:
     seed: int = 42
     max_episode_length_s: float = 8.0
     num_envs: int = 1024
     env_spacing: float = 2.0
     terrain_type: str = "plane"
     terrain_generator = None
-    # IMPORTANT: provide the robot asset
     robot = INSPIRE_HAND_CFG
+
+    # NEW: optional assets (None means “don’t spawn”)
+    table: RigidObjectCfg | None = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Table",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.6, 0.6, 0.03),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True, kinematic_enabled=True),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6), metallic=0.0, roughness=0.6),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(0.50, 0.0, 0.70), rot=(1.0, 0.0, 0.0, 0.0)
+        ),
+    )
+
+    grasp_object: RigidObjectCfg | None = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Object",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.10),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=False, max_depenetration_velocity=3.0),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.8, 0.3, 0.3), metallic=0.2, roughness=0.4),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(0.55, 0.0, 0.73), rot=(1.0, 0.0, 0.0, 0.0)
+        ),
+    )
 
 @configclass
 class InspireHandGraspEnvCfg:
