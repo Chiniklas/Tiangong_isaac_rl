@@ -3,7 +3,7 @@ import argparse
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Tutorial on running the cartpole RL environment.")
+parser = argparse.ArgumentParser(description="Tutorial on running the customized InspireHand RL environment.")
 parser.add_argument("--num_envs", type=int, default=16, help="Number of environments to spawn.")
 
 # append AppLauncher cli args
@@ -17,7 +17,7 @@ simulation_app = app_launcher.app
 
 # Import your env
 import torch
-from legged_lab.envs.inspirehand.grasp_cfg import InspireHandEnv, InspireHandEnvCfg
+from legged_lab.envs.inspirehand.grasp_env_cfg import InspireHandEnv, InspireHandEnvCfg
 
 def main():
     env_cfg = InspireHandEnvCfg()
@@ -45,7 +45,7 @@ def main():
             obs, rew, term, trunc, info = env.step(acts)
 
             # obs should be (num_envs, num_joints) in your minimal setup
-            print("obs[0][:5] =", obs[0, :5].cpu().numpy())
+            print("obs =", obs[0, :].cpu().numpy())
             step += 1
 
     env.close()
