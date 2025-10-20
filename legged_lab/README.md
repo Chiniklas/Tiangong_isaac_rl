@@ -12,3 +12,9 @@ Refer to the top-level project `README.md` for installation steps and a rundown 
 
 
 # TODO: implement a RL pipeline for grasp tasks for inspire hand
+
+## Inspire Hand dataset helpers
+
+- A standalone loader lives in `legged_lab/assets/inspirehand/object_library.py`. It scans the external `dataset/mixed_train` folder (copied from the GraspXL release) and exposes lightweight `GraspObjectInfo` entries for each of the 58 PartNet objects.
+- Existing environments are untouched; the library can be imported from `legged_lab.assets.inspirehand` when you are ready to wire the dataset into the Inspire Hand RL pipeline.
+- Optional: convert the meshes to single-rigid USDs for faster previewing via `python legged_lab/scripts/inspire_hand/tools/convert_dataset_to_usd.py`. Generated files are stored under `dataset/grasp_usd/<object>/` and picked up automatically by the loader.

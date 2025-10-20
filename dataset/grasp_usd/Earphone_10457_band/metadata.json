@@ -1,0 +1,5 @@
+{
+  "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Earphone_10457_band/Earphone_10457_band_static.usd",
+  "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Earphone_10457_band/parts/top_watertight_tiny.usd",
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Earphone_10457_band/parts/bottom_watertight_tiny.usd"
+}

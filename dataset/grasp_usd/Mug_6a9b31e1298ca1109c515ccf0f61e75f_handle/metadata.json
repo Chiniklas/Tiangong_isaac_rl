@@ -1,0 +1,5 @@
+{
+  "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Mug_6a9b31e1298ca1109c515ccf0f61e75f_handle/Mug_6a9b31e1298ca1109c515ccf0f61e75f_handle_static.usd",
+  "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Mug_6a9b31e1298ca1109c515ccf0f61e75f_handle/parts/top_watertight_tiny.usd",
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Mug_6a9b31e1298ca1109c515ccf0f61e75f_handle/parts/bottom_watertight_tiny.usd"
+}

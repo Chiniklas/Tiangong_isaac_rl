@@ -1,0 +1,5 @@
+{
+  "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/SodaCan_3703ada8cc31df4337b00c4c2fbe82aa/SodaCan_3703ada8cc31df4337b00c4c2fbe82aa_static.usd",
+  "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/SodaCan_3703ada8cc31df4337b00c4c2fbe82aa/parts/top_watertight_tiny.usd",
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/SodaCan_3703ada8cc31df4337b00c4c2fbe82aa/parts/bottom_watertight_tiny.usd"
+}

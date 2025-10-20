@@ -1,0 +1,5 @@
+{
+  "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Bowl_2efc35a3625fa50961a9876fa6384765/Bowl_2efc35a3625fa50961a9876fa6384765_static.usd",
+  "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Bowl_2efc35a3625fa50961a9876fa6384765/parts/top_watertight_tiny.usd",
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Bowl_2efc35a3625fa50961a9876fa6384765/parts/bottom_watertight_tiny.usd"
+}

@@ -1,0 +1,5 @@
+{
+  "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Basket_3e64a7042776f19adc9938c9fceb2ffd/Basket_3e64a7042776f19adc9938c9fceb2ffd_static.usd",
+  "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Basket_3e64a7042776f19adc9938c9fceb2ffd/parts/top_watertight_tiny.usd",
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Basket_3e64a7042776f19adc9938c9fceb2ffd/parts/bottom_watertight_tiny.usd"
+}

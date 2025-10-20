@@ -1,0 +1,5 @@
+{
+  "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Book_5fb3c24bb78a75976ad1e524762a34d5/Book_5fb3c24bb78a75976ad1e524762a34d5_static.usd",
+  "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Book_5fb3c24bb78a75976ad1e524762a34d5/parts/top_watertight_tiny.usd",
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Book_5fb3c24bb78a75976ad1e524762a34d5/parts/bottom_watertight_tiny.usd"
+}

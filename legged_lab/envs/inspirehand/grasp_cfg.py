@@ -32,7 +32,7 @@ class InspireHandGraspSceneCfg(BaseSceneCfg):
     scene_cfg_cls: type = GraspSceneCfg
     seed: int = 42
     max_episode_length_s: float = 8.0
-    num_envs: int = 1024
+    num_envs: int = 4
     env_spacing: float = 2.0
     terrain_type: str = "plane"
     terrain_generator = None

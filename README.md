@@ -156,6 +156,7 @@ TODO
 - **Step 2 – Install locally:** Install the package in editable mode (`pip install -e .`) inside an Isaac Lab-enabled environment so `legged_lab` and `rsl_rl` are importable.
 - **Step 3 – Warm up Isaac:** Boot Isaac Sim/Isaac Lab once to let it build caches, then register the environment by importing `legged_lab.envs` (this executes the `task_registry.register("inspirehand_grasp", ...)` call).
 - **Step 4 – Smoke test:** Run `python -m legged_lab.scripts.inspire_hand.tests.test_env_registration` to confirm the `inspirehand_grasp` task builds successfully before launching training jobs.
+- **Step 5 – Convert grasp objects (optional but recommended):** Inside the Isaac Lab shell (`./isaaclab.sh --run`), run `python legged_lab/scripts/inspire_hand/tools/convert_dataset_to_usd.py` to populate `dataset/grasp_usd/` with single-body USDs. The preview/test scripts automatically use these assets when present.
 
 ### Train Agents
 

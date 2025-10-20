@@ -1,0 +1,5 @@
+{
+  "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/WineGlass_ec742ff34906e5e890234001fde0a408/WineGlass_ec742ff34906e5e890234001fde0a408_static.usd",
+  "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/WineGlass_ec742ff34906e5e890234001fde0a408/parts/top_watertight_tiny.usd",
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/WineGlass_ec742ff34906e5e890234001fde0a408/parts/bottom_watertight_tiny.usd"
+}

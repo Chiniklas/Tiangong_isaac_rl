@@ -1,6 +1,7 @@
 # legged_lab/envs/inspirehand/grasp_env.py
 
 import torch
+from isaaclab.utils.buffers import DelayBuffer
 from legged_lab.envs.base.base_env import BaseEnv
 from .grasp_cfg import InspireHandGraspEnvCfg
 
@@ -32,6 +33,33 @@ class InspireHandGraspEnv(BaseEnv):
         self.table = self.scene["table"]
         self.obj   = self.scene["object"]
 
+        # action split: finger joints + palm translation
+        self._joint_action_dim = self.robot.data.default_joint_pos.shape[1]
+        self._palm_action_dim = 3
+        self.num_actions = self._joint_action_dim + self._palm_action_dim
+        self._palm_action_scale = 0.03  # meters per env step for unit command
+
+        # rebuild delay buffer to handle extended action dimension
+        self.action_buffer = DelayBuffer(
+            self.cfg.domain_rand.action_delay.params["max_delay"], self.num_envs, device=self.device
+        )
+        self.action_buffer.compute(
+            torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        )
+        if self.cfg.domain_rand.action_delay.enable:
+            time_lags = torch.randint(
+                low=self.cfg.domain_rand.action_delay.params["min_delay"],
+                high=self.cfg.domain_rand.action_delay.params["max_delay"] + 1,
+                size=(self.num_envs,),
+                dtype=torch.int,
+                device=self.device,
+            )
+            self.action_buffer.set_time_lag(time_lags, torch.arange(self.num_envs, device=self.device))
+
+        # refresh observation buffers with updated action dimension
+        self.init_obs_buffer()
+
+        self._zero_root_vel = torch.zeros(self.num_envs, 6, device=self.device)
 
         self._hold_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
@@ -66,16 +94,48 @@ class InspireHandGraspEnv(BaseEnv):
 
     # ---------- step / rewards ----------
     def step(self, actions: torch.Tensor):
-        obs, reward_buf, reset_buf, extras = super().step(actions)
+        delayed_actions = self.action_buffer.compute(actions)
+
+        joint_actions = delayed_actions[:, : self._joint_action_dim]
+        palm_actions = delayed_actions[:, self._joint_action_dim :]
+
+        joint_actions = torch.clip(joint_actions, -self.clip_actions, self.clip_actions).to(self.device)
+        joint_targets = joint_actions * self.action_scale + self.robot.data.default_joint_pos
+
+        self._apply_palm_translation(palm_actions)
+
+        for _ in range(self.cfg.sim.decimation):
+            self.sim_step_counter += 1
+            self.robot.set_joint_position_target(joint_targets)
+            self.scene.write_data_to_sim()
+            self.sim.step(render=False)
+            self.scene.update(dt=self.physics_dt)
+
+        if not self.headless:
+            self.sim.render()
+
+        self.episode_length_buf += 1
+        self.command_generator.compute(self.step_dt)
+        if "interval" in self.event_manager.available_modes:
+            self.event_manager.apply(mode="interval", dt=self.step_dt)
+
+        self.reset_buf, self.time_out_buf = self.check_reset()
+        _ = self.reward_manager.compute(self.step_dt)
+        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        self.reset(env_ids)
+
+        actor_obs, critic_obs = self.compute_observations()
+        self.extras["observations"] = {"critic": critic_obs}
+
         reward_buf = self._get_rewards()
-        # RSL-RL 2.x expects this for critic input
-        extras["observations"]["critic"] = obs
-        return obs, reward_buf, reset_buf, extras
+        extras = self.extras
+        extras["observations"]["critic"] = actor_obs
+        return actor_obs, reward_buf, self.reset_buf, extras
 
     def _get_rewards(self) -> torch.Tensor:
         # Smoothness (tiny penalty) based on last action from BaseEnv’s delay buffer
-        last_action = self.action_buffer._circular_buffer.buffer[:, -1, :]
-        r_smooth = -0.001 * (last_action**2).sum(dim=1)
+        last_joint_action = self.action_buffer._circular_buffer.buffer[:, -1, : self._joint_action_dim]
+        r_smooth = -0.001 * (last_joint_action**2).sum(dim=1)
 
         # If we don't have an object yet, only smoothness applies
         if self.obj is None:
@@ -108,3 +168,18 @@ class InspireHandGraspEnv(BaseEnv):
         time_out_buf = self.episode_length_buf >= self.max_episode_length
         reset_buf = time_out_buf.clone()
         return reset_buf, time_out_buf
+
+    def _apply_palm_translation(self, palm_actions: torch.Tensor):
+        if palm_actions.numel() == 0:
+            return
+
+        clamped = torch.clip(palm_actions, -1.0, 1.0)
+        root_state = self.robot.data.root_state_w.clone()
+        root_state[:, :3] += clamped * self._palm_action_scale
+
+        if self.table is not None:
+            min_height = self.table.data.root_pos_w[:, 2] + 0.02
+            root_state[:, 2].clamp_(min=min_height)
+
+        self.robot.write_root_pose_to_sim(root_state[:, :7])
+        self.robot.write_root_velocity_to_sim(self._zero_root_vel)

@@ -1,0 +1,5 @@
+{
+  "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Donut_3fd993924ef28b30cb1981abcfe85234/Donut_3fd993924ef28b30cb1981abcfe85234_static.usd",
+  "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Donut_3fd993924ef28b30cb1981abcfe85234/parts/top_watertight_tiny.usd",
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Donut_3fd993924ef28b30cb1981abcfe85234/parts/bottom_watertight_tiny.usd"
+}
