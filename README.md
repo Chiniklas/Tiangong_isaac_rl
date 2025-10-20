@@ -1,11 +1,37 @@
-# Tiangong_isaac_rl: this is a forked repo for dexterous manipulation on top of the TienKung-Lab locomotion template
+# Tiangong Isaac RL
 
-## Current hardware setup
+Forked from the TienKung-Lab locomotion template and extended for Inspire Hand dexterous manipulation.
+
+## Table of Contents
+- [Hardware Setup](#hardware-setup)
+- [Upstream Locomotion Workflow](#upstream-locomotion-workflow)
+  - [Installation](#installation)
+  - [Usage](#usage)
+    - [Visualize Motion](#visualize-motion)
+    - [Visualize Motion with Sensors](#visualize-motion-with-sensors)
+    - [Train](#train)
+    - [Play](#play)
+    - [Sim2Sim (MuJoCo)](#sim2sim-mujoco)
+    - [TensorBoard](#tensorboard)
+  - [Code Formatting](#code-formatting)
+  - [Troubleshooting](#troubleshooting)
+  - [References](#references)
+- [Inspire Hand Dexterous Manipulation](#inspire-hand-dexterous-manipulation)
+  - [Environment Setup](#environment-setup)
+  - [Train Agents](#train-agents)
+  - [Reward Shaping](#reward-shaping)
+  - [Policy Inference and Visualization](#policy-inference-and-visualization)
+  - [Sim2Real](#sim2real)
+  - [Data Recording](#data-recording)
+  - [Policy Distillation](#policy-distillation)
+- [Project TODOs](#project-todos)
+
+## Hardware Setup
 - Tiangong2 pro version humanoid
 - two inspire-hands
 
-# Basic usage and some modifications from the upstream template
-## Installation
+## Upstream Locomotion Workflow
+### Installation
 TienKung-Lab is built with IsaacSim 4.5.0 and IsaacLab 2.1.0. **However**, since the tutorial for IsaacSim 4.5.0 has been depricated, our Tiangong_isaac_rl repo is built upon IsaacSim 5.0.0 AND Isaaclab 2.1.0. The installation is tested ok.
 
 - Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html). We recommend using the conda installation as it simplifies calling Python scripts from the terminal.
@@ -31,9 +57,9 @@ pip install -e .
 python legged_lab/scripts/train.py --task=walk  --logger=tensorboard --headless --num_envs=64
 ```
 
-## Usage
+### Usage
 
-### Visualize motion
+#### Visualize Motion
 
 Visualize the motion by updating the simulation with data from tienkung/datasets/motion_visualization.
 
@@ -42,7 +68,7 @@ python legged_lab/scripts/play_amp_animation.py --task=walk --num_envs=1
 python legged_lab/scripts/play_amp_animation.py --task=run --num_envs=1
 ```
 
-### Visualize motion with sensors
+#### Visualize Motion with Sensors
 
 Visualize the motion with sensors by updating the simulation with data from tienkung/datasets/motion_visualization.
 
@@ -51,7 +77,7 @@ python legged_lab/scripts/play_amp_animation.py --task=walk_with_sensor --num_en
 python legged_lab/scripts/play_amp_animation.py --task=run_with_sensor --num_envs=1
 ```
 
-### Train
+#### Train
 
 Train the policy using AMP expert data from tienkung/datasets/motion_amp_expert.
 
@@ -60,7 +86,7 @@ python legged_lab/scripts/train.py --task=walk --headless --logger=tensorboard -
 python legged_lab/scripts/train.py --task=run --headless --logger=tensorboard --num_envs=4096
 ```
 
-### Play
+#### Play
 
 Run the trained policy.
 
@@ -69,7 +95,7 @@ python legged_lab/scripts/play.py --task=walk --num_envs=1
 python legged_lab/scripts/play.py --task=run --num_envs=1
 ```
 
-### Sim2Sim(MuJoCo)
+#### Sim2Sim (MuJoCo)
 
 Evaluate the trained policy in MuJoCo to perform cross-simulation validation.
 
@@ -79,13 +105,13 @@ python legged_lab/scripts/sim2sim.py --task walk --policy Exported_policy/walk.p
 python legged_lab/scripts/sim2sim.py --task run --policy Exported_policy/run.pt --duration 10
 ```
 
-### Tensorboard
+#### TensorBoard
 ```bash
 tensorboard --logdir=logs/walk
 tensorboard --logdir=logs/run
 ```
 
-## Code formatting
+### Code Formatting
 
 We have a pre-commit template to automatically format your code.
 To install pre-commit:
@@ -100,9 +126,9 @@ Then you can run pre-commit with:
 pre-commit run --all-files
 ```
 
-## Troubleshooting
+### Troubleshooting
 
-### Pylance Missing Indexing of Extensions
+#### Pylance Missing Indexing of Extensions
 
 In some VsCode versions, the indexing of part of the extensions is missing. In this case, add the path to your extension in `.vscode/settings.json` under the key `"python.analysis.extraPaths"`.
 
@@ -120,31 +146,31 @@ In some VsCode versions, the indexing of part of the extensions is missing. In t
 }
 ```
 
-## References:
+### References
 
 TODO
 
-# For our dex manipulation features:
-## env setup 
-- Verify the Inspire Hand USD path in `legged_lab/assets/handright9253/inspirehand.py`. If you cloned the repo elsewhere, update `INSPIRE_HAND_USD` so it points at your local USD.
-- Install the package in editable mode (`pip install -e .`) inside an Isaac Lab-enabled environment so `legged_lab` and `rsl_rl` are importable.
-- Boot Isaac Sim/Isaac Lab once to let it build caches, then register the environment by importing `legged_lab.envs` (this executes the `task_registry.register("inspirehand_grasp", ...)` call).
-- Run `python -m legged_lab.scripts.inspire_hand.tests.test_env_registration` to confirm the `inspirehand_grasp` task builds successfully before launching training jobs.
+## Inspire Hand Dexterous Manipulation
+### Environment Setup 
+- **Step 1 – Point at the asset:** Verify the Inspire Hand USD path in `legged_lab/assets/handright9253/inspirehand.py`. If you cloned the repo elsewhere, update `INSPIRE_HAND_USD` so it points at your local USD.
+- **Step 2 – Install locally:** Install the package in editable mode (`pip install -e .`) inside an Isaac Lab-enabled environment so `legged_lab` and `rsl_rl` are importable.
+- **Step 3 – Warm up Isaac:** Boot Isaac Sim/Isaac Lab once to let it build caches, then register the environment by importing `legged_lab.envs` (this executes the `task_registry.register("inspirehand_grasp", ...)` call).
+- **Step 4 – Smoke test:** Run `python -m legged_lab.scripts.inspire_hand.tests.test_env_registration` to confirm the `inspirehand_grasp` task builds successfully before launching training jobs.
 
-## train agents
+### Train Agents
 
-## reward shaping
+### Reward Shaping
 
-## policy inference and visualization
+### Policy Inference and Visualization
 
-## sim2real
+### Sim2Real
 
-## data recording
+### Data Recording
 
-## policy distillation
+### Policy Distillation
 
 
-## TODO List
+## Project TODOs
 - [ ] transfer RL pipeline from Raisim to Isaacsim
 - [ ] train a working RL agent based on one object and one grasp primitive
 - [ ] add point cloud sensors for real time perception
