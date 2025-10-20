@@ -21,8 +21,8 @@ INSPIRE_HAND_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         joint_pos={},  # use USD defaults
-        pos=(0.50, 0.0, 0.75),
-        rot=(1.0, 0.0, 0.0, 0.0),
+        pos=(0.0, 0.0, 0.95),
+        rot=(0.0, 0.70710678, 0.0, 0.70710678),
     ),
     actuators={
         "all": ImplicitActuatorCfg(

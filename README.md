@@ -160,7 +160,33 @@ TODO
 
 ### Train Agents
 
+- **Preview / smoke test:**
+  1. Within the Isaac Lab shell run the preview script to verify object placement and affordance overlays:
+
+     ```bash
+     ./isaaclab.sh --run python legged_lab/scripts/inspire_hand/tests/test_spawn_objects.py --objects <object_id>
+     ```
+
+  2. Adjust spawn parameters (hand offsets, table/object pose) via `legged_lab/envs/inspirehand/spawn_cfg.py` as needed.
+- **Training loop:**
+  1. Launch headless training from the same shell:
+
+     ```bash
+     ./isaaclab.sh --run python legged_lab/scripts/train.py --task=inspirehand_grasp --headless --num_envs=512 --logger=tensorboard
+     ```
+
+  2. Monitor metrics with TensorBoard (`tensorboard --logdir=logs/inspirehand_grasp`).
+  3. Inspect logged scalars (`reward/reach`, `reward/lift`, `reward/hold`, `reward/smooth`, `grasp/aff_sdf_mean`, `grasp/non_aff_penalty`) to track grasp quality during training.
+
 ### Reward Shaping
+
+- **Inspire Hand grasp task:**
+  - `reach`: `exp(-3 * ||palm - object||)` encourages the hand to move toward the object.
+  - `lift`: awards 1.0 once the object’s lowest point clears the table height by `lift_height_buffer` (or a ground threshold if the table is disabled).
+  - `hold`: adds 0.5 after the object has stayed lifted for 10 consecutive steps.
+  - `smooth`: `-0.001 * ||last_joint_action||^2` discourages jerky finger movements.
+  - `affordance` bonus: `+0.3 * exp(-10 * |affordance SDF|)` when fingertip contacts fall in annotated affordance regions (if SDF data exists).
+  - `non-affordance` penalty: `-0.4 * ReLU(-non_affordance SDF)` penalizes fingertip penetration into discouraged regions.
 
 ### Policy Inference and Visualization
 

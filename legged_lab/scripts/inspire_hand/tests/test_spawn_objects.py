@@ -56,6 +56,15 @@ except ModuleNotFoundError as exc:  # pragma: no cover
 from legged_lab.assets.inspirehand import GraspObjectLibrary
 
 
+def _find_seed_for_object(object_infos, target_id, search_limit: int = 10_000) -> int:
+    for seed in range(search_limit):
+        rng = random.Random(seed)
+        choice = rng.choice(object_infos)
+        if choice.object_id == target_id:
+            return seed
+    raise ValueError(f"Failed to find seed selecting '{target_id}' within {search_limit} attempts.")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -115,51 +124,67 @@ def _add_affordance_markers(env, obj_info):
 
     if obj_info.affordance_usd and obj_info.affordance_usd.exists():
         _spawn_marker("AffordancePreview", obj_info.affordance_usd, (0.2, 0.9, 0.2), 0.35)
-    if obj_info.non_affordance_usd and obj_info.non_affordance_usd.exists():
-        _spawn_marker("NonAffordancePreview", obj_info.non_affordance_usd, (0.9, 0.2, 0.2), 0.25)
 
 
 def build_env_cfg(asset_path: Path):
     from legged_lab.envs.inspirehand.grasp_cfg import InspireHandGraspEnvCfg
     import isaaclab.sim as sim_utils
+    from legged_lab.envs.inspirehand.spawn_cfg import InspireHandSpawnCfg
 
     cfg = InspireHandGraspEnvCfg()
     cfg.scene.num_envs = 4
     cfg.scene.env_spacing = 1.5
 
+    cfg.scene.spawn = InspireHandSpawnCfg()
+
     if asset_path.suffix.lower() in {".urdf"}:
-        cfg.scene.grasp_object.spawn = sim_utils.UrdfFileCfg(
-            asset_path=asset_path.as_posix(),
-            fix_base=True,
-            link_density=500.0,
-            collision_from_visuals=True,
-            joint_drive=sim_utils.UrdfFileCfg.JointDriveCfg(
-                target_type="none",
-                gains=sim_utils.UrdfFileCfg.JointDriveCfg.PDGainsCfg(
-                    stiffness=0.0,
-                    damping=0.0,
+        cfg.scene.spawn.grasp_object.enable = False
+        cfg.scene.grasp_object = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/Object",
+            spawn=sim_utils.UrdfFileCfg(
+                asset_path=asset_path.as_posix(),
+                fix_base=True,
+                link_density=500.0,
+                collision_from_visuals=True,
+                joint_drive=sim_utils.UrdfFileCfg.JointDriveCfg(
+                    target_type="none",
+                    gains=sim_utils.UrdfFileCfg.JointDriveCfg.PDGainsCfg(
+                        stiffness=0.0,
+                        damping=0.0,
+                    ),
                 ),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    disable_gravity=False,
+                    max_depenetration_velocity=3.0,
+                ),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
             ),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                disable_gravity=False,
-                max_depenetration_velocity=3.0,
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=cfg.scene.spawn.grasp_object.pos,
+                rot=cfg.scene.spawn.grasp_object.rot,
             ),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
         )
     elif asset_path.suffix.lower() in {".usd", ".usda"}:
-        cfg.scene.grasp_object.spawn = sim_utils.UsdFileCfg(
-            usd_path=asset_path.as_posix(),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                disable_gravity=False,
-                max_depenetration_velocity=3.0,
+        cfg.scene.spawn.grasp_object.enable = False
+        cfg.scene.grasp_object = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/Object",
+            spawn=sim_utils.UsdFileCfg(
+                usd_path=asset_path.as_posix(),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    disable_gravity=False,
+                    max_depenetration_velocity=3.0,
+                ),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
             ),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=cfg.scene.spawn.grasp_object.pos,
+                rot=cfg.scene.spawn.grasp_object.rot,
+            ),
         )
     else:
         raise ValueError(f"Unsupported asset format: {asset_path}")
 
-    cfg.scene.grasp_object.init_state.pos = (0.55, 0.0, 0.73)
-    cfg.scene.grasp_object.init_state.rot = (1.0, 0.0, 0.0, 0.0)
+    cfg.scene.spawn.hand.offset_from_object = (0.0, 0.20, 0.0)
     return cfg
 
 
@@ -208,6 +233,9 @@ def main():
             print(f"[WARN] {exc}")
             continue
 
+        seed = _find_seed_for_object(available_infos, obj_id)
+        cfg.scene.seed = seed
+
         env = InspireHandGraspEnv(cfg, headless=args.headless)
         _add_affordance_markers(env, obj_info)
 
@@ -217,49 +245,10 @@ def main():
 
         if obj_info.affordance_usd:
             print(f"[INFO] Affordance overlay active ({obj_info.affordance_usd.name})")
-        if obj_info.non_affordance_usd:
-            print(f"[INFO] Non-affordance overlay active ({obj_info.non_affordance_usd.name})")
         print(f"[INFO] Previewed {obj_id}")
         env.close()
 
     print("[SUCCESS] Completed preview.")
-    simulation_app.close()
-    for obj_id in object_ids:
-        obj_info = library.get(obj_id)
-        asset_path = _resolve_asset_path(obj_info)
-        if asset_path is None:
-            print(f"[WARN] Skipping '{obj_id}' (no converted USD found). Run the conversion tool first.")
-            continue
-        asset_pairs.append((obj_id, asset_path))
-
-    if not asset_pairs:
-        print("[ERROR] No usable objects found. Aborting preview.")
-        simulation_app.close()
-        return
-
-    cfg = build_env_cfg(asset_pairs[0][1], len(asset_pairs))
-    env = InspireHandGraspEnv(cfg, headless=args.headless)
-
-    stage: Usd.Stage = env.scene.stage  # type: ignore[attr-defined]
-    for env_idx, (obj_id, asset_path) in enumerate(asset_pairs):
-        prim_path = f"/World/envs/env_{env_idx}/Object"
-        prim = stage.GetPrimAtPath(prim_path)
-        if not prim:
-            print(f"[WARN] Could not locate prim '{prim_path}' for env {env_idx}.")
-            continue
-        refs = prim.GetReferences()
-        refs.ClearReferences()
-        refs.AddReference(asset_path.as_posix())
-        print(f"[INFO] env_{env_idx}: {obj_id} -> {asset_path.name}")
-
-    env.reset(torch.arange(env.num_envs, device=env.device))
-
-    actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
-    for _ in range(args.steps):
-        env.step(actions)
-
-    print("[SUCCESS] Completed preview.")
-    env.close()
     simulation_app.close()
 
 

@@ -16,6 +16,7 @@ from legged_lab.envs.base.base_env_config import BaseAgentCfg
 from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG  # <-- your asset cfg
 from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
 import isaaclab.sim as sim_utils
+from legged_lab.envs.inspirehand.spawn_cfg import InspireHandSpawnCfg
 
 # -- empty reward config (we compute rewards in the env) --
 @configclass
@@ -42,8 +43,8 @@ class InspireHandRewardScales:
 
 @configclass
 class InspireHandResetCfg:
-    max_lateral_distance: float = 0.2
-    max_vertical_offset: float = 0.2
+    max_lateral_distance: float = 0.5
+    max_vertical_offset: float = 0.5
 
 
 @configclass
@@ -56,35 +57,69 @@ class InspireHandGraspSceneCfg(BaseSceneCfg):
     terrain_type: str = "plane"
     terrain_generator = None
     robot = INSPIRE_HAND_CFG
+    spawn: InspireHandSpawnCfg = InspireHandSpawnCfg()
+    table: RigidObjectCfg | None = None
+    grasp_object: RigidObjectCfg | None = None
 
-    # NEW: optional assets (None means “don’t spawn”)
-    table: RigidObjectCfg | None = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Table",
-        spawn=sim_utils.CuboidCfg(
-            size=(0.6, 0.6, 0.03),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True, kinematic_enabled=True),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.0),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6), metallic=0.0, roughness=0.6),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.50, 0.0, 0.70), rot=(1.0, 0.0, 0.0, 0.0)
-        ),
-    )
+    def __post_init__(self):
+        try:
+            super().__post_init__()  # type: ignore[misc]
+        except AttributeError:
+            pass
 
-    grasp_object: RigidObjectCfg | None = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Object",
-        spawn=sim_utils.CuboidCfg(
-            size=(0.05, 0.05, 0.10),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=False, max_depenetration_velocity=3.0),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.8, 0.3, 0.3), metallic=0.2, roughness=0.4),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.55, 0.0, 0.73), rot=(1.0, 0.0, 0.0, 0.0)
-        ),
-    )
+        spawn_cfg = self.spawn
+
+        if spawn_cfg.table.enable:
+            table_spawn = sim_utils.CuboidCfg(
+                size=spawn_cfg.table.size,
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    disable_gravity=spawn_cfg.table.disable_gravity,
+                    kinematic_enabled=True,
+                ),
+                mass_props=sim_utils.MassPropertiesCfg(mass=0.0),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=spawn_cfg.table.color,
+                    metallic=spawn_cfg.table.metallic,
+                    roughness=spawn_cfg.table.roughness,
+                ),
+            )
+            self.table = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Table",
+                spawn=table_spawn,
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=spawn_cfg.table.pos,
+                    rot=spawn_cfg.table.rot,
+                ),
+            )
+        else:
+            self.table = None
+
+        if spawn_cfg.grasp_object.enable:
+            object_spawn = sim_utils.CuboidCfg(
+                size=spawn_cfg.grasp_object.size,
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    disable_gravity=spawn_cfg.grasp_object.disable_gravity,
+                    max_depenetration_velocity=3.0,
+                ),
+                mass_props=sim_utils.MassPropertiesCfg(mass=spawn_cfg.grasp_object.mass),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=spawn_cfg.grasp_object.color,
+                    metallic=spawn_cfg.grasp_object.metallic,
+                    roughness=spawn_cfg.grasp_object.roughness,
+                ),
+            )
+            self.grasp_object = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Object",
+                spawn=object_spawn,
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=spawn_cfg.grasp_object.pos,
+                    rot=spawn_cfg.grasp_object.rot,
+                ),
+            )
+        else:
+            self.grasp_object = None
 
 @configclass
 class InspireHandGraspEnvCfg:

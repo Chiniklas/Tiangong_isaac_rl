@@ -68,7 +68,16 @@ class InspireHandGraspEnv(BaseEnv):
         self.table = self.scene["table"]
         self.obj   = self.scene["object"]
 
+        self._hand_spawn_cfg = cfg.scene.spawn.hand
         self._default_hand_state = self.robot.data.root_state_w.clone()
+        if self._hand_spawn_cfg.align_to_object:
+            hand_target_x = float(self._default_object_pos[0] + self._hand_spawn_cfg.offset_from_object[0])
+            hand_target_y = float(self._default_object_pos[1] + self._hand_spawn_cfg.offset_from_object[1])
+        else:
+            hand_target_x = float(self._hand_spawn_cfg.base_pos[0])
+            hand_target_y = float(self._hand_spawn_cfg.base_pos[1])
+        self._default_hand_state[:, 0] = hand_target_x
+        self._default_hand_state[:, 1] = hand_target_y
         self._zero_root_vel = torch.zeros(self.num_envs, 6, device=self.device)
         self._apply_object_info(self._initial_object_info, initial=True)
 
@@ -84,10 +93,34 @@ class InspireHandGraspEnv(BaseEnv):
             [[0.0, 0.0, 1.0]] * self._num_tips, dtype=torch.float, device=self.device
         )
 
-        if self._table_thickness > 0.0:
-            self._default_table_surface = float(self.table.data.root_pos_w[0, 2] + self._table_thickness * 0.5)
+        if self.table is not None:
+            if self._table_thickness > 0.0:
+                self._default_table_surface = float(
+                    self.table.data.root_pos_w[0, 2] + self._table_thickness * 0.5
+                )
+            else:
+                self._default_table_surface = float(self.table.data.root_pos_w[0, 2])
         else:
-            self._default_table_surface = float(self.table.data.root_pos_w[0, 2])
+            self._default_table_surface = float(self._default_object_pos[2])
+
+        # orient palm parallel to table and hover slightly above the surface
+        if self._hand_spawn_cfg.align_to_object:
+            base_height = self._default_table_surface if self.table is not None else float(self._default_object_pos[2])
+            hover_height = (
+                base_height
+                + self._hand_spawn_cfg.hover_above_table
+                + self._hand_spawn_cfg.offset_from_object[2]
+            )
+        else:
+            hover_height = float(self._hand_spawn_cfg.base_pos[2])
+        self._default_hand_state[:, 2] = hover_height
+        palm_down_xyzw = torch.tensor(
+            self._hand_spawn_cfg.orientation_xyzw,
+            dtype=self._default_hand_state.dtype,
+            device=self.device,
+        ).repeat(self.num_envs, 1)
+        self._default_hand_state[:, 3:7] = palm_down_xyzw
+        self._warp_hand_to_default(slice(None))
 
         # action split: finger joints + palm translation
         self._joint_action_dim = self.robot.data.default_joint_pos.shape[1]
@@ -291,7 +324,7 @@ class InspireHandGraspEnv(BaseEnv):
         # lift reward: uses table if present, otherwise a heuristic z-threshold
         if self.table is not None:
             table_z = self.table.data.root_pos_w[:, 2] + self._table_thickness * 0.5
-            object_bottom = obj_p[:, 2] - self._current_lowest
+            object_bottom = obj_p[:, 2] + self._current_lowest
             lifted = object_bottom > (table_z + self.cfg.reward_scales.lift_height_buffer)
         else:
             lifted = obj_p[:, 2] > self.cfg.reward_scales.ground_lift_height
@@ -385,8 +418,16 @@ class InspireHandGraspEnv(BaseEnv):
 
     def _apply_object_info(self, info: GraspObjectInfo, *, initial: bool = False):
         self._current_object = info
-        self._current_lowest = info.lowest_point or 0.0
         self._load_object_sdfs(info)
+
+        lowest = info.lowest_point if info.lowest_point is not None else None
+        if lowest is None and self._non_sdf_min is not None:
+            lowest = float(self._non_sdf_min[2].detach().cpu())
+        if lowest is None and self._aff_sdf_min is not None:
+            lowest = float(self._aff_sdf_min[2].detach().cpu())
+        if lowest is None:
+            lowest = 0.0
+        self._current_lowest = float(lowest if lowest <= 0.0 else -lowest)
 
         base_x, base_y, _ = self._default_object_pos
         if initial:
