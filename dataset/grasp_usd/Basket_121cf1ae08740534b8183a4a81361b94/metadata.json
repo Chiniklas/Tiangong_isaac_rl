@@ -1,5 +1,7 @@
 {
   "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Basket_121cf1ae08740534b8183a4a81361b94/Basket_121cf1ae08740534b8183a4a81361b94_static.usd",
   "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Basket_121cf1ae08740534b8183a4a81361b94/parts/top_watertight_tiny.usd",
-  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Basket_121cf1ae08740534b8183a4a81361b94/parts/bottom_watertight_tiny.usd"
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Basket_121cf1ae08740534b8183a4a81361b94/parts/bottom_watertight_tiny.usd",
+  "affordance_sdf": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Basket_121cf1ae08740534b8183a4a81361b94/affordance_sdf.npz",
+  "non_affordance_sdf": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Basket_121cf1ae08740534b8183a4a81361b94/non_affordance_sdf.npz"
 }

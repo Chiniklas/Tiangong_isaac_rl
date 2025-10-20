@@ -1,5 +1,7 @@
 {
   "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Earphone_9657_right_earcup/Earphone_9657_right_earcup_static.usd",
   "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Earphone_9657_right_earcup/parts/top_watertight_tiny.usd",
-  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Earphone_9657_right_earcup/parts/bottom_watertight_tiny.usd"
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Earphone_9657_right_earcup/parts/bottom_watertight_tiny.usd",
+  "affordance_sdf": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Earphone_9657_right_earcup/affordance_sdf.npz",
+  "non_affordance_sdf": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Earphone_9657_right_earcup/non_affordance_sdf.npz"
 }

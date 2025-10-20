@@ -1,5 +1,7 @@
 {
   "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Mug_40f9a6cc6b2c3b3a78060a3a3a55e18f_body/Mug_40f9a6cc6b2c3b3a78060a3a3a55e18f_body_static.usd",
   "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Mug_40f9a6cc6b2c3b3a78060a3a3a55e18f_body/parts/top_watertight_tiny.usd",
-  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Mug_40f9a6cc6b2c3b3a78060a3a3a55e18f_body/parts/bottom_watertight_tiny.usd"
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Mug_40f9a6cc6b2c3b3a78060a3a3a55e18f_body/parts/bottom_watertight_tiny.usd",
+  "affordance_sdf": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Mug_40f9a6cc6b2c3b3a78060a3a3a55e18f_body/affordance_sdf.npz",
+  "non_affordance_sdf": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Mug_40f9a6cc6b2c3b3a78060a3a3a55e18f_body/non_affordance_sdf.npz"
 }

@@ -51,6 +51,8 @@ class GraspObjectInfo:
     static_usd: Optional[Path]
     affordance_usd: Optional[Path] = None
     non_affordance_usd: Optional[Path] = None
+    affordance_sdf: Optional[Path] = None
+    non_affordance_sdf: Optional[Path] = None
 
     def to_dict(self) -> Dict[str, object]:
         """Convert to a serialisable dictionary with POSIX-style paths."""
@@ -152,7 +154,7 @@ class GraspObjectLibrary:
             )
 
             lowest_point = self._read_lowest_point(child / "lowest_point_new.txt")
-            static_usd, affordance_usd, non_affordance_usd = self._find_converted_usds(child, object_id)
+            static_usd, affordance_usd, non_affordance_usd, affordance_sdf, non_affordance_sdf = self._find_converted_usds(child, object_id)
 
             info = GraspObjectInfo(
                 object_id=object_id,
@@ -166,6 +168,8 @@ class GraspObjectLibrary:
                 static_usd=static_usd,
                 affordance_usd=affordance_usd,
                 non_affordance_usd=non_affordance_usd,
+                affordance_sdf=affordance_sdf,
+                non_affordance_sdf=non_affordance_sdf,
             )
             self._objects[object_id] = info
 
@@ -198,7 +202,7 @@ class GraspObjectLibrary:
 
     def _find_converted_usds(
         self, directory: Path, object_id: str
-    ) -> tuple[Optional[Path], Optional[Path], Optional[Path]]:
+    ) -> tuple[Optional[Path], Optional[Path], Optional[Path], Optional[Path], Optional[Path]]:
         local_root = directory / "usd"
         metadata_path = local_root / "metadata.json"
         candidates: list[Path] = []
@@ -212,6 +216,8 @@ class GraspObjectLibrary:
         static_usd: Optional[Path] = None
         affordance_usd: Optional[Path] = None
         non_affordance_usd: Optional[Path] = None
+        affordance_sdf: Optional[Path] = None
+        non_affordance_sdf: Optional[Path] = None
 
         for meta in candidates:
             try:
@@ -228,6 +234,14 @@ class GraspObjectLibrary:
                 if data.get("non_affordance_usd")
                 else non_affordance_usd
             )
+            affordance_sdf = (
+                Path(data["affordance_sdf"]).expanduser() if data.get("affordance_sdf") else affordance_sdf
+            )
+            non_affordance_sdf = (
+                Path(data["non_affordance_sdf"]).expanduser()
+                if data.get("non_affordance_sdf")
+                else non_affordance_sdf
+            )
 
         if static_usd is None:
             fallback = local_root / f"{object_id}_static.usd"
@@ -238,7 +252,7 @@ class GraspObjectLibrary:
             if fallback.exists():
                 static_usd = fallback
 
-        return static_usd, affordance_usd, non_affordance_usd
+        return static_usd, affordance_usd, non_affordance_usd, affordance_sdf, non_affordance_sdf
 
 
 __all__ = ["GraspObjectInfo", "GraspObjectLibrary", "DEFAULT_DATASET_ROOT"]

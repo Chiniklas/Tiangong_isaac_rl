@@ -1,5 +1,7 @@
 {
   "static_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Knife_115/Knife_115_static.usd",
   "affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Knife_115/parts/top_watertight_tiny.usd",
-  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Knife_115/parts/bottom_watertight_tiny.usd"
+  "non_affordance_usd": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Knife_115/parts/bottom_watertight_tiny.usd",
+  "affordance_sdf": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Knife_115/affordance_sdf.npz",
+  "non_affordance_sdf": "/home/chizhang/projects/Tiangong_isaac_rl/dataset/grasp_usd/Knife_115/non_affordance_sdf.npz"
 }

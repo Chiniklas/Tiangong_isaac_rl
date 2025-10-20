@@ -27,6 +27,25 @@ class InspireHandGraspRewardCfg(RewardCfg):
 class InspireHandEventCfg:
     pass
 
+
+@configclass
+class InspireHandRewardScales:
+    reach: float = 1.0
+    lift: float = 1.0
+    hold: float = 0.5
+    smooth: float = -0.001
+    affordance_sdf: float = 0.3
+    non_affordance_sdf: float = 0.4
+    lift_height_buffer: float = 0.05
+    ground_lift_height: float = 0.75
+
+
+@configclass
+class InspireHandResetCfg:
+    max_lateral_distance: float = 0.2
+    max_vertical_offset: float = 0.2
+
+
 @configclass
 class InspireHandGraspSceneCfg(BaseSceneCfg):
     scene_cfg_cls: type = GraspSceneCfg
@@ -79,6 +98,8 @@ class InspireHandGraspEnvCfg:
         feet_body_names=[],                # none for now
     )
     reward: InspireHandGraspRewardCfg = InspireHandGraspRewardCfg()
+    reward_scales: InspireHandRewardScales = InspireHandRewardScales()
+    reset_cfg: InspireHandResetCfg = InspireHandResetCfg()
     normalization: NormalizationCfg = NormalizationCfg()
     noise: NoiseCfg = NoiseCfg(add_noise=False)
     # Disable all events and action delay for now
