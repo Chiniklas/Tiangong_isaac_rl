@@ -34,3 +34,4 @@ except Exception as e:
 # 5) Clean shutdown
 # (AppLauncher implements context teardown; we still call close for clarity.)
 simulation_app.close()
+

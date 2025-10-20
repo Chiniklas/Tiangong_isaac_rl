@@ -14,6 +14,7 @@ from legged_lab.envs.base.base_config import (
 )
 from legged_lab.envs.base.base_env_config import BaseAgentCfg
 from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG  # <-- your asset cfg
+from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
 import isaaclab.sim as sim_utils
 
 # -- empty reward config (we compute rewards in the env) --
@@ -28,6 +29,7 @@ class InspireHandEventCfg:
 
 @configclass
 class InspireHandGraspSceneCfg(BaseSceneCfg):
+    scene_cfg_cls: type = GraspSceneCfg
     seed: int = 42
     max_episode_length_s: float = 8.0
     num_envs: int = 1024

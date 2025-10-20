@@ -9,3 +9,6 @@ Inspire Hand dexterous manipulation environment.
 - `scripts/inspire_hand/train.py` and `scripts/inspire_hand/play.py` are the equivalents for the `inspirehand_grasp` task, with additional smoke tests under `scripts/inspire_hand/tests/`.
 
 Refer to the top-level project `README.md` for installation steps and a rundown of the full workflow.
+
+
+# TODO: implement a RL pipeline for grasp tasks for inspire hand

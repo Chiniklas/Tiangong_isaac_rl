@@ -19,7 +19,7 @@
 from typing import TYPE_CHECKING
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, patterns
 from isaaclab.terrains.terrain_importer_cfg import TerrainImporterCfg
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 @configclass
 class SceneCfg(InteractiveSceneCfg):
-    """Configuration for a cart-pole scene."""
+    """Interactive scene with optional grasp props (table + object)."""
 
     def __init__(self, config: "BaseSceneCfg", physics_dt, step_dt):
         super().__init__(num_envs=config.num_envs, env_spacing=config.env_spacing)
@@ -79,6 +79,15 @@ class SceneCfg(InteractiveSceneCfg):
                 ),
             ),
         )
+
+        table_cfg = getattr(config, "table", None)
+        if isinstance(table_cfg, RigidObjectCfg):
+            self.table = table_cfg.replace()
+
+        object_cfg = getattr(config, "grasp_object", getattr(config, "object", None))
+        if isinstance(object_cfg, RigidObjectCfg):
+            # expose under canonical name so envs can access scene["object"]
+            self.object = object_cfg.replace()
 
         if config.height_scanner.enable_height_scan:
             self.height_scanner = RayCasterCfg(

@@ -8,7 +8,23 @@ from .grasp_cfg import InspireHandGraspEnvCfg
 class InspireHandGraspEnv(BaseEnv):
     cfg: InspireHandGraspEnvCfg
 
-    def __init__(self, cfg: InspireHandGraspEnvCfg, headless: bool):
+    def __init__(
+        self,
+        cfg: InspireHandGraspEnvCfg,
+        headless: bool | None = None,
+        *,
+        render_mode=None,
+        **kwargs,
+    ):
+        if headless is None:
+            if isinstance(render_mode, bool):
+                headless = not render_mode
+            else:
+                headless = render_mode is None
+
+        # store render_mode for callers that rely on it (e.g. Gymnasium)
+        self.render_mode = render_mode
+
         super().__init__(cfg, headless)
 
         # Always present

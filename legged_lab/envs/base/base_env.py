@@ -60,7 +60,8 @@ class BaseEnv(VecEnv):
         )
         self.sim = SimulationContext(sim_cfg)
 
-        scene_cfg = SceneCfg(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
+        scene_cls = getattr(cfg.scene, "scene_cfg_cls", SceneCfg)
+        scene_cfg = scene_cls(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
         self.scene = InteractiveScene(scene_cfg)
         self.sim.reset()
 
@@ -318,6 +319,33 @@ class BaseEnv(VecEnv):
         actor_obs, critic_obs = self.compute_observations()
         self.extras["observations"] = {"critic": critic_obs}
         return actor_obs, self.extras
+
+    def close(self):
+        """Gracefully release simulation resources when callers request it."""
+        if getattr(self, "_is_closed", False):
+            return
+
+        if hasattr(self, "scene"):
+            scene = getattr(self, "scene")
+            for attr in ("clear", "destroy", "shutdown"):
+                if hasattr(scene, attr):
+                    try:
+                        getattr(scene, attr)()
+                    except Exception:
+                        pass
+                    break
+
+        if hasattr(self, "sim"):
+            sim = getattr(self, "sim")
+            for attr in ("close", "shutdown", "stop", "destroy"):
+                if hasattr(sim, attr):
+                    try:
+                        getattr(sim, attr)()
+                    except Exception:
+                        pass
+                    break
+
+        self._is_closed = True
 
     @staticmethod
     def seed(seed: int = -1) -> int:
