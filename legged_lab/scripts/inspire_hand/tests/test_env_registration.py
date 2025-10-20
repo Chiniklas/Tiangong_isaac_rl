@@ -22,8 +22,8 @@ TASK = "inspirehand_grasp"
 try:
     env_cfg, agent_cfg = task_registry.get_cfgs(TASK)
     env_class = task_registry.get_task_class(TASK)
-    # render_mode None keeps the viewer disabled while still initializing sensors
-    env = env_class(env_cfg, render_mode=None)
+    # request viewer so we can visually confirm table/object placement if needed
+    env = env_class(env_cfg, render_mode=True)
     print(f"[SUCCESS] Built '{TASK}' env: {env}")
     env.close()
 except KeyError as ke:

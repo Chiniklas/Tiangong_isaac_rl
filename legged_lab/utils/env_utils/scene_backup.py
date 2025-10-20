@@ -19,7 +19,6 @@
 from typing import TYPE_CHECKING
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, patterns
@@ -80,53 +79,6 @@ class SceneCfg(InteractiveSceneCfg):
                 ),
             ),
         )
-
-        # --- ADD: TABLE ---
-        self.table = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/Table",
-            spawn=sim_utils.CuboidCfg(
-                size=(0.6, 0.6, 0.03),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    disable_gravity=True,        # kinematic plane-ish table
-                    kinematic_enabled=True
-                ),
-                mass_props=sim_utils.MassPropertiesCfg(mass=0.0),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.6, 0.6, 0.6),
-                    metallic=0.0,
-                    roughness=0.6,
-                ),
-            ),
-            init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(0.50, 0.0, 0.70),   # z = table top height
-                rot=(1.0, 0.0, 0.0, 0.0),
-            ),
-        )
-
-        # --- ADD: GRASP OBJECT ---
-        self.object = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/Object",
-            spawn=sim_utils.CuboidCfg(
-                size=(0.05, 0.05, 0.10),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    disable_gravity=False,
-                    max_depenetration_velocity=3.0
-                ),
-                mass_props=sim_utils.MassPropertiesCfg(mass=0.3),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.8, 0.3, 0.3),
-                    metallic=0.2,
-                    roughness=0.4,
-                ),
-            ),
-            init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(0.55, 0.0, 0.73),  # slightly above table top so it rests
-                rot=(1.0, 0.0, 0.0, 0.0),
-            ),
-        )
-
 
         if config.height_scanner.enable_height_scan:
             self.height_scanner = RayCasterCfg(

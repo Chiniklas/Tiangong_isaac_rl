@@ -1,8 +1,6 @@
 # legged_lab/envs/inspirehand/grasp_env.py
 
 import torch
-import isaaclab.sim as sim_utils
-from isaaclab.assets import RigidObjectCfg
 from legged_lab.envs.base.base_env import BaseEnv
 from .grasp_cfg import InspireHandGraspEnvCfg
 
@@ -14,90 +12,34 @@ class InspireHandGraspEnv(BaseEnv):
         super().__init__(cfg, headless)
 
         # Always present
-        self.hand = self.scene["robot"]
-
-        # Spawn table + object if missing
-        self._spawn_table_and_object()
-
-        # Keep handles now that they exist
+        self.hand  = self.scene["robot"]
         self.table = self.scene["table"]
-        self.obj = self.scene["object"]
+        self.obj   = self.scene["object"]
+
 
         self._hold_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
-    def _safe_has(self, name: str) -> bool:
-        """Return True if an entity can be retrieved by key, False if KeyError."""
-        try:
-            _ = self.scene[name]
-            return True
-        except KeyError:
-            return False
+    # # ---------- helpers ----------
+    # def _try_get_scene_entity(self, name: str):
+    #     """Return scene[name] if it exists, else None."""
+    #     try:
+    #         return self.scene[name]
+    #     except KeyError:
+    #         return None
 
-    def _spawn_table_and_object(self):
-        """Add a kinematic table and a dynamic cube to every env if they are not present."""
-        need_table = not self._safe_has("table")
-        need_object = not self._safe_has("object")
-        if not (need_table or need_object):
-            return
-
-        if need_table:
-            table_cfg = RigidObjectCfg(
-                prim_path="{ENV_REGEX_NS}/Table",
-                spawn=sim_utils.CuboidCfg(
-                    size=(0.60, 0.60, 0.03),
-                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                        disable_gravity=True,
-                        kinematic_enabled=True,
-                        max_depenetration_velocity=3.0,
-                    ),
-                    mass_props=sim_utils.MassPropertiesCfg(mass=0.0),
-                    collision_props=sim_utils.CollisionPropertiesCfg(),
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.6, 0.6, 0.6), metallic=0.0, roughness=0.6
-                    ),
-                ),
-                init_state=RigidObjectCfg.InitialStateCfg(
-                    pos=(0.50, 0.0, 0.70),
-                    rot=(1.0, 0.0, 0.0, 0.0),
-                ),
-            )
-            self.scene.add("table", table_cfg)
-
-        if need_object:
-            obj_cfg = RigidObjectCfg(
-                prim_path="{ENV_REGEX_NS}/Object",
-                spawn=sim_utils.CuboidCfg(
-                    size=(0.05, 0.05, 0.10),
-                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                        disable_gravity=False,
-                        max_depenetration_velocity=3.0,
-                    ),
-                    mass_props=sim_utils.MassPropertiesCfg(mass=0.4),
-                    collision_props=sim_utils.CollisionPropertiesCfg(),
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.8, 0.3, 0.3), metallic=0.2, roughness=0.4
-                    ),
-                ),
-                init_state=RigidObjectCfg.InitialStateCfg(
-                    pos=(0.55, 0.0, 0.73),
-                    rot=(1.0, 0.0, 0.0, 0.0),
-                ),
-            )
-            self.scene.add("object", obj_cfg)
-
-        # Make sure tensors are materialized
-        self.scene.reset()
-        self.scene.write_data_to_sim()
-        self.sim.forward()
-
-    # ----- rest of the class stays the same -----
-
+    # ---------- observations ----------
     def compute_current_observations(self):
         q = self.hand.data.joint_pos
         dq = self.hand.data.joint_vel
-        palm_p = self.hand.data.root_pos_w
-        obj_p = self.obj.data.root_pos_w
-        rel_p = obj_p - palm_p
+
+        # rel pos hand->object if object exists; otherwise zeros(3)
+        if self.obj is not None:
+            obj_p = self.obj.data.root_pos_w
+            palm_p = self.hand.data.root_pos_w     # using root as palm proxy for now
+            rel_p = obj_p - palm_p
+        else:
+            rel_p = torch.zeros(self.num_envs, 3, device=self.device, dtype=q.dtype)
+
         actor_obs = torch.cat([q, dq, rel_p], dim=-1)
         critic_obs = actor_obs
         return actor_obs, critic_obs
@@ -106,31 +48,47 @@ class InspireHandGraspEnv(BaseEnv):
         actor_obs, critic_obs = self.compute_current_observations()
         return actor_obs, critic_obs
 
+    # ---------- step / rewards ----------
     def step(self, actions: torch.Tensor):
         obs, reward_buf, reset_buf, extras = super().step(actions)
         reward_buf = self._get_rewards()
+        # RSL-RL 2.x expects this for critic input
         extras["observations"]["critic"] = obs
         return obs, reward_buf, reset_buf, extras
 
     def _get_rewards(self) -> torch.Tensor:
+        # Smoothness (tiny penalty) based on last action from BaseEnv’s delay buffer
         last_action = self.action_buffer._circular_buffer.buffer[:, -1, :]
         r_smooth = -0.001 * (last_action**2).sum(dim=1)
 
+        # If we don't have an object yet, only smoothness applies
+        if self.obj is None:
+            return r_smooth
+
         palm_p = self.hand.data.root_pos_w
-        obj_p = self.obj.data.root_pos_w
+        obj_p  = self.obj.data.root_pos_w
+
+        # reach reward
         dist = torch.linalg.norm(obj_p - palm_p, dim=1)
         r_reach = torch.exp(-3.0 * dist)
 
-        table_z = self.table.data.root_pos_w[:, 2]
-        lifted = obj_p[:, 2] > (table_z + 0.05)
+        # lift reward: uses table if present, otherwise a heuristic z-threshold
+        if self.table is not None:
+            table_z = self.table.data.root_pos_w[:, 2]
+            lifted = obj_p[:, 2] > (table_z + 0.05)
+        else:
+            lifted = obj_p[:, 2] > 0.75  # world-z heuristic without table
+
         r_lift = lifted.float() * 1.0
 
+        # hold bonus for sustained lift
         self._hold_counter = torch.where(lifted, self._hold_counter + 1, torch.zeros_like(self._hold_counter))
         r_hold = 0.5 * (self._hold_counter > 10).float()
 
         return r_reach + r_lift + r_hold + r_smooth
 
     def check_reset(self):
+        # simple time-limit termination
         time_out_buf = self.episode_length_buf >= self.max_episode_length
         reset_buf = time_out_buf.clone()
         return reset_buf, time_out_buf

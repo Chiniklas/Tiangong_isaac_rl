@@ -14,15 +14,12 @@ def main():
     parser.add_argument("--headless", action="store_true")
     args = parser.parse_args()
 
-    # 1) Launch Omniverse Kit first
     from isaaclab.app import AppLauncher
     app = AppLauncher(headless=args.headless).app  # keep launcher alive until shutdown
 
-    # 2) Now import env/cfg (safe after Kit is up)
     from legged_lab.envs.inspirehand.grasp_cfg import InspireHandGraspEnvCfg
     from legged_lab.envs.inspirehand.grasp_env import InspireHandGraspEnv
 
-    # 3) Small env
     cfg = InspireHandGraspEnvCfg()
     # override a few knobs so we can see several replicas in a tight scene
     cfg.scene.num_envs = args.num_envs
@@ -31,7 +28,20 @@ def main():
     # headless flag determines whether Omni renders a window
     env = InspireHandGraspEnv(cfg, headless=args.headless)
 
-    # 4) Step a few frames
+    # Confirm entities
+    try:
+        hand = env.scene["robot"]
+        table = env.scene["table"]
+        obj = env.scene["object"]
+        print("[CHECK] robot/table/object present: OK")
+        print("[INFO] table z (first env):", float(table.data.root_pos_w[0, 2]))
+        print("[INFO] object pos (first env):", obj.data.root_pos_w[0].tolist())
+    except KeyError as e:
+        print("[ERROR] missing entity:", e)
+        app.close()
+        return
+
+    # Step a bit
     import torch
     # zero torques keep the fingertips relaxed; we only check sim stability here
     actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
