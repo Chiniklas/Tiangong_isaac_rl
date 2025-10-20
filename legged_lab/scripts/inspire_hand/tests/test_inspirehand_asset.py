@@ -1,9 +1,12 @@
-# legged_lab/scripts/tests/test_inspirehand_asset.py
+"""Standalone inspection script for the Inspire Hand articulation.
 
-## to test:
-#  - basic loading of the InspireHand asset
-#  - basic articulation data access
-#  - basic stepping with joint position targets
+Goals:
+  1. Spawn the USD asset inside a minimal Isaac Lab scene.
+  2. Inspect articulation metadata (joint names, limits, DoF counts).
+  3. Command the joints with their current pose to ensure setpoints stream.
+Run it with the usual AppLauncher flags (e.g. ``--headless``) if you only need
+CI coverage.
+"""
 
 from isaaclab.app import AppLauncher
 
@@ -23,6 +26,7 @@ from isaaclab.sim import SimulationContext, PhysxCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.assets import AssetBaseCfg
 from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG
+
 
 # 1) Build a minimal scene config
 class _SceneCfg(InteractiveSceneCfg):

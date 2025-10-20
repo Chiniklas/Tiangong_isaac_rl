@@ -1,3 +1,5 @@
+"""Quick sanity check that the Inspire Hand task is registered and constructible."""
+
 # Minimal registration check for inspirehand_grasp
 from isaaclab.app import AppLauncher
 
@@ -20,6 +22,7 @@ TASK = "inspirehand_grasp"
 try:
     env_cfg, agent_cfg = task_registry.get_cfgs(TASK)
     env_class = task_registry.get_task_class(TASK)
+    # render_mode None keeps the viewer disabled while still initializing sensors
     env = env_class(env_cfg, render_mode=None)
     print(f"[SUCCESS] Built '{TASK}' env: {env}")
     env.close()
@@ -29,4 +32,5 @@ except Exception as e:
     print(f"[ERROR] Could not create '{TASK}' env:", e)
 
 # 5) Clean shutdown
+# (AppLauncher implements context teardown; we still call close for clarity.)
 simulation_app.close()

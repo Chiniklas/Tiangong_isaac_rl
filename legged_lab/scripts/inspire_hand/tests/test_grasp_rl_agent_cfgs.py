@@ -1,6 +1,9 @@
-# this script is for testing grasp_cfg.py and grasp_env.py
+"""Minimal runtime test that exercises InspireHandGraspEnv and its configs.
 
-# Minimal runtime test for InspireHandGraspEnv + cfg
+This mirrors the training stack: boot Isaac, build the environment from
+``InspireHandGraspEnvCfg``, query observations, and step a few frames with
+zero actions to confirm reward/termination tensors behave.
+"""
 
 import argparse
 from isaaclab.app import AppLauncher
@@ -19,6 +22,7 @@ from legged_lab.envs.inspirehand.grasp_env import InspireHandGraspEnv
 
 def main():
     cfg = InspireHandGraspEnvCfg()
+    # Force headless True so smoke tests run in CI without a viewer
     env = InspireHandGraspEnv(cfg, headless=True)
 
     print("[INFO] Env online.")
@@ -31,6 +35,7 @@ def main():
 
     # Step a few times with random actions
     for i in range(3):
+        # stick to zero torques so we only validate rollout plumbing
         a = torch.zeros(env.num_envs, env.num_actions, device=env.device)
         obs, rew, done, ext = env.step(a)
         print(f"  step {i}: reward mean={rew.mean().item():.4f}, done={done.any().item()}")
@@ -40,4 +45,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # keep the launcher tear-down explicit so GPU contexts release cleanly
     simulation_app.close()

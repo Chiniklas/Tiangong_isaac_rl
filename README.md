@@ -3,12 +3,6 @@
 ## Current hardware setup
 - Tiangong2 pro version humanoid
 - two inspire-hands
-  
-## TODO List
-- [ ] transfer RL pipeline from Raisim to Isaacsim
-- [ ] train a working RL agent based on one object and one grasp primitive
-- [ ] add point cloud sensors for real time perception
-- [ ] run RL agents on real hardware
 
 # Basic usage and some modifications from the upstream template
 ## Installation
@@ -132,6 +126,10 @@ TODO
 
 # For our dex manipulation features:
 ## env setup 
+- Verify the Inspire Hand USD path in `legged_lab/assets/handright9253/inspirehand.py`. If you cloned the repo elsewhere, update `INSPIRE_HAND_USD` so it points at your local USD.
+- Install the package in editable mode (`pip install -e .`) inside an Isaac Lab-enabled environment so `legged_lab` and `rsl_rl` are importable.
+- Boot Isaac Sim/Isaac Lab once to let it build caches, then register the environment by importing `legged_lab.envs` (this executes the `task_registry.register("inspirehand_grasp", ...)` call).
+- Run `python -m legged_lab.scripts.inspire_hand.tests.test_env_registration` to confirm the `inspirehand_grasp` task builds successfully before launching training jobs.
 
 ## train agents
 
@@ -146,3 +144,8 @@ TODO
 ## policy distillation
 
 
+## TODO List
+- [ ] transfer RL pipeline from Raisim to Isaacsim
+- [ ] train a working RL agent based on one object and one grasp primitive
+- [ ] add point cloud sensors for real time perception
+- [ ] run RL agents on real hardware
