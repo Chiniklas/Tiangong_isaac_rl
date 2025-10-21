@@ -5,7 +5,7 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
 _ASSET_DIR = Path(__file__).resolve().parent
-INSPIRE_HAND_USD = str(_ASSET_DIR / "urdf" / "handright9253_simplified" / "handright9253_simplified.usd")
+INSPIRE_HAND_USD = str(_ASSET_DIR / "urdf" / "handright9253_simplified_floating" / "handright9253_simplified_floating.usd")
 
 INSPIRE_HAND_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",   # <-- match scene key "robot"
@@ -13,6 +13,7 @@ INSPIRE_HAND_CFG = ArticulationCfg(
         usd_path=INSPIRE_HAND_USD,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=False),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            fix_root_link=False,
             enabled_self_collisions=True,
             solver_position_iteration_count=8,
             solver_velocity_iteration_count=0,
@@ -21,7 +22,7 @@ INSPIRE_HAND_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         joint_pos={},  # use USD defaults
-        pos=(0.0, 0.0, 0.95),
+        pos=(0.0, 0.0, 0.75),
         rot=(0.0, 0.70710678, 0.0, 0.70710678),
     ),
     actuators={

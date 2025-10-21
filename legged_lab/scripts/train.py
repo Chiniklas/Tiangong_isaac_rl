@@ -105,6 +105,9 @@ def train():
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
+    if (not args_cli.distributed) or (app_launcher.local_rank == 0):
+        input("\n[INFO] Scene ready. Press Enter to start training... ")
+
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
 
 
