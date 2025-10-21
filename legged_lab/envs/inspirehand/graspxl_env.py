@@ -1,4 +1,4 @@
-# legged_lab/envs/inspirehand/grasp_env.py
+# legged_lab/envs/inspirehand/graspxl_env.py
 
 import math
 import random
@@ -11,8 +11,8 @@ import isaaclab.sim as sim_utils
 from isaaclab.utils.buffers import DelayBuffer
 from isaaclab.utils.math import quat_apply, quat_conjugate, quat_mul
 from legged_lab.envs.base.base_env import BaseEnv
-from .grasp_cfg import InspireHandGraspEnvCfg
 from legged_lab.assets.inspirehand.object_library import GraspObjectLibrary, GraspObjectInfo
+from .graspxl_cfg import InspireHandGraspEnvCfg, compute_reward
 
 
 class InspireHandGraspEnv(BaseEnv):
@@ -300,59 +300,12 @@ class InspireHandGraspEnv(BaseEnv):
         actor_obs, critic_obs = self.compute_observations()
         self.extras["observations"] = {"critic": critic_obs}
 
-        reward_buf = self._get_rewards()
+        reward_buf, reward_logs = compute_reward(self)
+        self.extras.setdefault("log", {})
+        self.extras["log"].update(reward_logs)
         extras = self.extras
         extras["observations"]["critic"] = actor_obs
         return actor_obs, reward_buf, self.reset_buf, extras
-
-    def _get_rewards(self) -> torch.Tensor:
-        # Smoothness (tiny penalty) based on last action from BaseEnv’s delay buffer
-        last_joint_action = self.action_buffer._circular_buffer.buffer[:, -1, : self._joint_action_dim]
-        r_smooth = -0.001 * (last_joint_action**2).sum(dim=1)
-
-        # If we don't have an object yet, only smoothness applies
-        if self.obj is None:
-            return r_smooth
-
-        palm_p = self.hand.data.root_pos_w
-        obj_p  = self.obj.data.root_pos_w
-
-        # reach reward
-        dist = torch.linalg.norm(obj_p - palm_p, dim=1)
-        r_reach = torch.exp(-3.0 * dist)
-
-        # lift reward: uses table if present, otherwise a heuristic z-threshold
-        if self.table is not None:
-            table_z = self.table.data.root_pos_w[:, 2] + self._table_thickness * 0.5
-            object_bottom = obj_p[:, 2] + self._current_lowest
-            lifted = object_bottom > (table_z + self.cfg.reward_scales.lift_height_buffer)
-        else:
-            lifted = obj_p[:, 2] > self.cfg.reward_scales.ground_lift_height
-
-        r_lift = lifted.float() * 1.0
-
-        # hold bonus for sustained lift
-        self._hold_counter = torch.where(lifted, self._hold_counter + 1, torch.zeros_like(self._hold_counter))
-        r_hold = 0.5 * (self._hold_counter > 10).float()
-
-        reward = r_reach + r_lift + r_hold + r_smooth
-
-        self.extras.setdefault("log", {})
-        self.extras["log"]["reward/reach"] = r_reach.detach().cpu()
-        self.extras["log"]["reward/lift"] = r_lift.detach().cpu()
-        self.extras["log"]["reward/hold"] = r_hold.detach().cpu()
-        self.extras["log"]["reward/smooth"] = r_smooth.detach().cpu()
-
-        if self._latest_aff_sdf is not None:
-            aff_mean = torch.abs(self._latest_aff_sdf).mean(dim=1)
-            reward += 0.3 * torch.exp(-10.0 * aff_mean)
-            self.extras["log"]["grasp/aff_sdf_mean"] = aff_mean.detach().cpu()
-        if self._latest_non_sdf is not None:
-            non_penalty = torch.relu(-self._latest_non_sdf).mean(dim=1)
-            reward -= 0.4 * non_penalty
-            self.extras["log"]["grasp/non_aff_penalty"] = non_penalty.detach().cpu()
-
-        return reward
 
     def check_reset(self):
         # simple time-limit termination

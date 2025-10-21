@@ -155,28 +155,33 @@ TODO
 - **Step 1 – Point at the asset:** Verify the Inspire Hand USD path in `legged_lab/assets/handright9253/inspirehand.py`. If you cloned the repo elsewhere, update `INSPIRE_HAND_USD` so it points at your local USD.
 - **Step 2 – Install locally:** Install the package in editable mode (`pip install -e .`) inside an Isaac Lab-enabled environment so `legged_lab` and `rsl_rl` are importable.
 - **Step 3 – Warm up Isaac:** Boot Isaac Sim/Isaac Lab once to let it build caches, then register the environment by importing `legged_lab.envs` (this executes the `task_registry.register("inspirehand_grasp", ...)` call).
-- **Step 4 – Smoke test:** Run `python -m legged_lab.scripts.inspire_hand.tests.test_env_registration` to confirm the `inspirehand_grasp` task builds successfully before launching training jobs.
-- **Step 5 – Convert grasp objects (optional but recommended):** Inside the Isaac Lab shell (`./isaaclab.sh --run`), run `python legged_lab/scripts/inspire_hand/tools/convert_dataset_to_usd.py` to populate `dataset/grasp_usd/` with single-body USDs. The preview/test scripts automatically use these assets when present.
+- **Step 4 – Smoke test:** Run `python -m legged_lab.scripts.inspire_hand.tests.test_env_task_registration` to confirm the `inspirehand_grasp` task builds successfully before launching training jobs.
+- **Step 5 – Convert grasp objects (optional but recommended):** Run `python3 legged_lab/scripts/inspire_hand/tools/convert_dataset_to_usd.py` to populate `dataset/grasp_usd/` with single-body USDs. The preview/test scripts automatically use these assets when present.
 
 ### Train Agents
 
 - **Preview / smoke test:**
-  1. Within the Isaac Lab shell run the preview script to verify object placement and affordance overlays:
+  1. Run the preview script to verify object placement and affordance overlays:
 
      ```bash
-     ./isaaclab.sh --run python legged_lab/scripts/inspire_hand/tests/test_spawn_objects.py --objects <object_id>
+     python3 legged_lab/scripts/inspire_hand/tests/test_spawn_object_scene.py --objects <object_id>
      ```
 
   2. Adjust spawn parameters (hand offsets, table/object pose) via `legged_lab/envs/inspirehand/spawn_cfg.py` as needed.
 - **Training loop:**
-  1. Launch headless training from the same shell:
+  1. Launch headless training:
 
      ```bash
-     ./isaaclab.sh --run python legged_lab/scripts/train.py --task=inspirehand_grasp --headless --num_envs=512 --logger=tensorboard
+     python3 legged_lab/scripts/train.py --task=inspirehand_grasp --headless --num_envs=512 --logger=tensorboard
      ```
 
   2. Monitor metrics with TensorBoard (`tensorboard --logdir=logs/inspirehand_grasp`).
   3. Inspect logged scalars (`reward/reach`, `reward/lift`, `reward/hold`, `reward/smooth`, `grasp/aff_sdf_mean`, `grasp/non_aff_penalty`) to track grasp quality during training.
+
+### Inspire Hand test scripts
+- `python -m legged_lab.scripts.inspire_hand.tests.test_env_task_registration`: verifies the RL task registers and builds without launching simulation.
+- `python3 legged_lab/scripts/inspire_hand/tests/test_spawn_object_scene.py`: spawns sampled objects to validate scene composition and spawn parameters.
+- `python3 legged_lab/scripts/inspire_hand/tests/test_rl_agent.py`: logs observation/action dimensions, PPO network layout, reward coefficients, then runs a short rollout smoke test with the default agent configuration.
 
 ### Reward Shaping
 

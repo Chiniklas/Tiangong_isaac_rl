@@ -127,7 +127,7 @@ def _add_affordance_markers(env, obj_info):
 
 
 def build_env_cfg(asset_path: Path):
-    from legged_lab.envs.inspirehand.grasp_cfg import InspireHandGraspEnvCfg
+    from legged_lab.envs.inspirehand.graspxl_cfg import InspireHandGraspEnvCfg
     import isaaclab.sim as sim_utils
     from legged_lab.envs.inspirehand.spawn_cfg import InspireHandSpawnCfg
 
@@ -217,7 +217,7 @@ def main():
     app = AppLauncher(headless=args.headless)
     simulation_app = app.app
 
-    from legged_lab.envs.inspirehand.grasp_env import InspireHandGraspEnv
+    from legged_lab.envs.inspirehand.graspxl_env import InspireHandGraspEnv
     import torch
 
     for obj_id in object_ids:

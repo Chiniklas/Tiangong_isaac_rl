@@ -44,10 +44,10 @@ task_registry.register(
 
 
 # my envs
-from legged_lab.envs.inspirehand.grasp_env import InspireHandGraspEnv
-from legged_lab.envs.inspirehand.grasp_cfg import (
+from legged_lab.envs.inspirehand.graspxl_env import InspireHandGraspEnv
+from legged_lab.envs.inspirehand.graspxl_cfg import (
     InspireHandGraspEnvCfg,
-    InspireHandGraspAgentCfg,   # <— now coming from grasp_cfg.py
+    InspireHandGraspAgentCfg,   # <— now coming from graspxl_cfg.py
 )
 
 task_registry.register(

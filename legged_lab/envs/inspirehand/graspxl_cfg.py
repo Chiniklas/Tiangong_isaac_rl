@@ -1,5 +1,6 @@
 from isaaclab.utils import configclass
 from isaaclab.assets import RigidObjectCfg
+import torch
 from legged_lab.envs.base.base_config import (
     BaseSceneCfg,
     RobotCfg,
@@ -13,10 +14,12 @@ from legged_lab.envs.base.base_config import (
     ActionDelayCfg,
 )
 from legged_lab.envs.base.base_env_config import BaseAgentCfg
-from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG  # <-- your asset cfg
-from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
 import isaaclab.sim as sim_utils
+from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG  # <-- your asset cfg
 from legged_lab.envs.inspirehand.spawn_cfg import InspireHandSpawnCfg
+from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
+
+from .reward_cfg import InspireHandRewardCfg
 
 # -- empty reward config (we compute rewards in the env) --
 @configclass
@@ -27,18 +30,6 @@ class InspireHandGraspRewardCfg(RewardCfg):
 @configclass
 class InspireHandEventCfg:
     pass
-
-
-@configclass
-class InspireHandRewardScales:
-    reach: float = 1.0
-    lift: float = 1.0
-    hold: float = 0.5
-    smooth: float = -0.001
-    affordance_sdf: float = 0.3
-    non_affordance_sdf: float = 0.4
-    lift_height_buffer: float = 0.05
-    ground_lift_height: float = 0.75
 
 
 @configclass
@@ -133,7 +124,7 @@ class InspireHandGraspEnvCfg:
         feet_body_names=[],                # none for now
     )
     reward: InspireHandGraspRewardCfg = InspireHandGraspRewardCfg()
-    reward_scales: InspireHandRewardScales = InspireHandRewardScales()
+    reward_scales: InspireHandRewardCfg = InspireHandRewardCfg()
     reset_cfg: InspireHandResetCfg = InspireHandResetCfg()
     normalization: NormalizationCfg = NormalizationCfg()
     noise: NoiseCfg = NoiseCfg(add_noise=False)
@@ -155,6 +146,60 @@ class InspireHandGraspEnvCfg:
         ),
     )
     sim: SimCfg = SimCfg(dt=1 / 120.0, decimation=2)
+
+
+def compute_reward(env):
+    reward_cfg = env.cfg.reward_scales
+    logs: dict[str, torch.Tensor] = {}
+
+    last_joint_action = env.action_buffer._circular_buffer.buffer[:, -1, : env._joint_action_dim]
+    r_smooth = reward_cfg.smooth * (last_joint_action**2).sum(dim=1)
+    logs["reward/smooth"] = r_smooth.detach().cpu()
+
+    if env.obj is None:
+        return r_smooth, logs
+
+    hand_pos = _palm_pos(env)
+    obj_pos = env.obj.data.root_pos_w
+
+    dist = torch.linalg.norm(obj_pos - hand_pos, dim=1)
+    r_reach = reward_cfg.reach * torch.exp(-reward_cfg.reach_exponent * dist)
+    logs["reward/reach"] = r_reach.detach().cpu()
+
+    if env.table is not None:
+        table_z = env.table.data.root_pos_w[:, 2] + env._table_thickness * 0.5
+        object_bottom = obj_pos[:, 2] + env._current_lowest
+        lifted = object_bottom > (table_z + reward_cfg.lift_height_buffer)
+    else:
+        lifted = obj_pos[:, 2] > reward_cfg.ground_lift_height
+    r_lift = reward_cfg.lift * lifted.float()
+    logs["reward/lift"] = r_lift.detach().cpu()
+
+    env._hold_counter = torch.where(lifted, env._hold_counter + 1, torch.zeros_like(env._hold_counter))
+    sustained = env._hold_counter > reward_cfg.hold_duration
+    r_hold = reward_cfg.hold * sustained.float()
+    logs["reward/hold"] = r_hold.detach().cpu()
+
+    reward = r_smooth + r_reach + r_lift + r_hold
+
+    if env._latest_aff_sdf is not None:
+        aff_mean = torch.abs(env._latest_aff_sdf).mean(dim=1)
+        reward = reward + reward_cfg.affordance_sdf * torch.exp(-reward_cfg.affordance_sdf_decay * aff_mean)
+        logs["grasp/aff_sdf_mean"] = aff_mean.detach().cpu()
+
+    if env._latest_non_sdf is not None:
+        non_penalty = torch.relu(-env._latest_non_sdf).mean(dim=1)
+        reward = reward - reward_cfg.non_affordance_sdf * non_penalty
+        logs["grasp/non_aff_penalty"] = non_penalty.detach().cpu()
+
+    return reward, logs
+
+
+def _palm_pos(env):
+    tf = getattr(env.hand.data, "link_tf_w", None)
+    if tf is not None and tf.ndim == 3 and tf.shape[1] > 0:
+        return tf[:, 0, :3]
+    return env.hand.data.root_pos_w
 
 @configclass
 class InspireHandGraspAgentCfg(BaseAgentCfg):
