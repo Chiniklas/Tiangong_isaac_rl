@@ -154,6 +154,8 @@ def compute_reward(env):
     if env.obj is None:
         reward = torch.zeros(env.num_envs, device=env.device, dtype=env.robot.data.root_pos_w.dtype)
         logs["reward/approach"] = reward.detach().cpu()
+        logs["reward/lift"] = reward.detach().cpu()
+        logs["reward/hold"] = reward.detach().cpu()
         return reward, logs
 
     hand_pos = _palm_pos(env)
@@ -178,7 +180,21 @@ def compute_reward(env):
         logs[f"debug/hand_pos_env0_{axis}"] = hand_pos[0, idx].detach().cpu()
         logs[f"debug/object_pos_env0_{axis}"] = obj_pos[0, idx].detach().cpu()
 
-    reward = r_reach
+    if env.table is not None:
+        table_z = env.table.data.root_pos_w[:, 2] + env._table_thickness * 0.5
+        object_bottom = obj_pos[:, 2] + env._current_lowest
+        lifted = object_bottom > (table_z + reward_cfg.lift_height_buffer)
+    else:
+        lifted = obj_pos[:, 2] > reward_cfg.ground_lift_height
+    r_lift = reward_cfg.lift * lifted.float()
+    logs["reward/lift"] = r_lift.detach().cpu()
+
+    env._hold_counter = torch.where(lifted, env._hold_counter + 1, torch.zeros_like(env._hold_counter))
+    sustained = env._hold_counter > reward_cfg.hold_duration
+    r_hold = reward_cfg.hold * sustained.float()
+    logs["reward/hold"] = r_hold.detach().cpu()
+
+    reward = r_reach + r_lift + r_hold
     return reward, logs
 
 
@@ -192,7 +208,7 @@ def _palm_pos(env):
 @configclass
 class GraspXLAgentCfg(BaseAgentCfg):
     num_steps_per_env = 32
-    max_iterations = 40000
+    max_iterations = 1000
     runner_class_name = "OnPolicyRunner"
     experiment_name = "graspxl_grasp"
     run_name = ""
