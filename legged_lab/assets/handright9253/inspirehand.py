@@ -11,7 +11,7 @@ INSPIRE_HAND_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",   # <-- match scene key "robot"
     spawn=sim_utils.UsdFileCfg(
         usd_path=INSPIRE_HAND_USD,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=False),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             fix_root_link=False,
             enabled_self_collisions=True,

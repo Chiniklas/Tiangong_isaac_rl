@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""Preview a random GraspXL object with the Inspire Hand in a 4-env scene.
+"""Preview a configured GraspXL scene with the Inspire Hand.
 
-The script launches the Isaac Lab simulator, spawns a table, the Inspire Hand
-robot, and a grasp object sampled from ``dataset/grasp_usd`` (without any
-affordance overlays), and steps the simulation for a short window so you can
-verify the assets.
+The script launches the Isaac Lab simulator, constructs the scene using the
+standard GraspXL configuration pipeline (spawn cfg → env cfg → env), and steps
+the simulation for a short window so you can verify the selected object setup.
 """
 
 from __future__ import annotations
 
 import argparse
-import random
 from pathlib import Path
 
 
@@ -63,69 +61,18 @@ def parse_args():
         help="Simulation steps to run.",
     )
     parser.add_argument(
-        "--seed",
+        "--num-envs",
         type=int,
-        default=None,
-        help="Optional RNG seed for object sampling.",
+        default=4,
+        help="Number of parallel environments to spawn.",
     )
     parser.add_argument(
-        "--dataset-root",
-        default=Path("dataset") / "grasp_usd",
+        "--config-yaml",
         type=Path,
-        help="Directory containing converted single-body USD assets.",
+        default=None,
+        help="Optional YAML file describing a fixed object spawn configuration.",
     )
     return parser.parse_args()
-
-
-def _pick_random_usd(dataset_root: Path, seed: int | None) -> Path:
-    usd_paths = sorted(
-        p
-        for p in dataset_root.rglob("*.usd")
-        if p.is_file()
-    )
-    if not usd_paths:
-        raise FileNotFoundError(
-            f"No .usd assets found in {dataset_root}. Run the GraspXL conversion tool first."
-        )
-    rng = random.Random(seed)
-    return rng.choice(usd_paths)
-
-
-def _build_env_cfg(usd_path: Path, seed: int | None) -> "GraspXLEnvCfg":
-    import isaaclab.sim as sim_utils
-    from isaaclab.assets import RigidObjectCfg
-    from legged_lab.envs.graspxl_rl.graspxl_cfg import GraspXLEnvCfg
-    from legged_lab.envs.graspxl_rl.spawn_cfg import GraspXLSpawnCfg
-
-    cfg = GraspXLEnvCfg()
-    cfg.scene.num_envs = 4
-    cfg.scene.env_spacing = 2.0
-    if seed is not None:
-        cfg.scene.seed = seed
-
-    cfg.scene.spawn = GraspXLSpawnCfg()
-    cfg.scene.spawn.hand.align_to_object = True
-    cfg.scene.spawn.grasp_object.enable = False
-    cfg.scene.spawn.grasp_object.affordance_usd = None
-    cfg.scene.spawn.grasp_object.affordance_sdf = None
-    cfg.scene.spawn.grasp_object.non_affordance_sdf = None
-
-    cfg.scene.grasp_object = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Object",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=usd_path.as_posix(),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                disable_gravity=False,
-                max_depenetration_velocity=3.0,
-            ),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=cfg.scene.spawn.grasp_object.pos,
-            rot=cfg.scene.spawn.grasp_object.rot,
-        ),
-    )
-    return cfg
 
 
 def main():
@@ -146,19 +93,31 @@ def main():
     import torch
 
     from legged_lab.envs.graspxl_rl.graspxl_env import GraspXLEnv
-    from legged_lab.envs.graspxl_rl.graspxl_cfg import GraspXLEnvCfg
+    from legged_lab.envs.graspxl_rl.graspxl_cfg import GraspXLEnvCfg, GraspXLGraspSceneCfg
+    from legged_lab.envs.graspxl_rl.spawn_cfg import GraspXLSpawnCfg
 
-    usd_path = _pick_random_usd(args.dataset_root.expanduser().resolve(), args.seed)
-    cfg = _build_env_cfg(usd_path, args.seed)
+    if args.config_yaml is not None:
+        spawn_cfg = GraspXLSpawnCfg(config_path=args.config_yaml.expanduser().resolve().as_posix())
+    else:
+        spawn_cfg = GraspXLSpawnCfg()
 
-    env = GraspXLEnv(cfg, headless=args.headless)
-    print(f"[INFO] Spawned GraspXL grasp object: {usd_path.name}")
+    scene_cfg = GraspXLGraspSceneCfg(spawn=spawn_cfg, num_envs=args.num_envs)
+    env_cfg = GraspXLEnvCfg(scene=scene_cfg)
+
+    env = GraspXLEnv(env_cfg, headless=args.headless)
+
+    spawned_name = getattr(env._current_object, "object_id", None)
+    if spawned_name is None:
+        spawned_name = spawn_cfg.grasp_object.object_id or "unknown"
+
+    print(f"[INFO] Spawned GraspXL grasp object: {spawned_name}")
 
     actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
-    for _ in range(args.steps):
-        env.step(actions)
-
-    print("[SUCCESS] Completed GraspXL preview run.")
+    try:
+        while True:
+            env.step(actions)
+    except KeyboardInterrupt:
+        print("\n[INFO] Interrupted by user. Shutting down...")
 
     env.close()
     simulation_app.close()

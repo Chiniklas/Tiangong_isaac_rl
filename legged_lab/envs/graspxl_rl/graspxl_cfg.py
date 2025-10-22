@@ -1,6 +1,9 @@
+from pathlib import Path
+
 from isaaclab.utils import configclass
 from isaaclab.assets import RigidObjectCfg
 import torch
+import yaml
 from legged_lab.envs.base.base_config import (
     BaseSceneCfg,
     RobotCfg,
@@ -12,37 +15,87 @@ from legged_lab.envs.base.base_config import (
     CommandsCfg,
     CommandRangesCfg,
     ActionDelayCfg,
+    EventCfg,
 )
 from legged_lab.envs.base.base_env_config import BaseAgentCfg
 import isaaclab.sim as sim_utils
+from .spawn_cfg import GraspXLSpawnCfg, load_spawn_from_yaml
 from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG
-from .spawn_cfg import GraspXLSpawnCfg
 from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
+from .logging_utils import log_debug
 
-from .reward_cfg import GraspXLRewardCfg
+_REWARD_CFG_PATH = Path(__file__).with_name("reward_cfg.yaml")
+if not _REWARD_CFG_PATH.exists():
+    raise FileNotFoundError(f"Reward configuration YAML not found: {_REWARD_CFG_PATH}")
+with _REWARD_CFG_PATH.open("r", encoding="utf-8") as _f:
+    _REWARD_DEFAULTS = yaml.safe_load(_f) or {}
+EXPECTED_KEYS = {
+    "reach",
+    "reach_exponent",
+    "lift",
+    "lift_height_buffer",
+    "ground_lift_height",
+    "hold",
+    "hold_duration",
+    "center",
+    "heading",
+    "wrist_align",
+    "smooth",
+    "affordance_sdf",
+    "affordance_sdf_decay",
+    "non_affordance_sdf",
+    "wrist_lin_vel",
+    "wrist_ang_vel",
+    "obj_lin_vel",
+    "obj_ang_vel",
+}
+missing = EXPECTED_KEYS.difference(_REWARD_DEFAULTS.keys())
+if missing:
+    raise KeyError(f"Missing keys in reward configuration YAML {_REWARD_CFG_PATH}: {sorted(missing)}")
 
 
 @configclass
-class GraspXLGraspRewardCfg(RewardCfg):
-    pass
-
-
-@configclass
-class GraspXLEventCfg:
-    pass
+class GraspXLRewardCfg:
+    reach: float = float(_REWARD_DEFAULTS["reach"])
+    reach_exponent: float = float(_REWARD_DEFAULTS["reach_exponent"])
+    lift: float = float(_REWARD_DEFAULTS["lift"])
+    lift_height_buffer: float = float(_REWARD_DEFAULTS["lift_height_buffer"])
+    ground_lift_height: float = float(_REWARD_DEFAULTS["ground_lift_height"])
+    hold: float = float(_REWARD_DEFAULTS["hold"])
+    hold_duration: int = int(_REWARD_DEFAULTS["hold_duration"])
+    center: float = float(_REWARD_DEFAULTS["center"])
+    heading: float = float(_REWARD_DEFAULTS["heading"])
+    wrist_align: float = float(_REWARD_DEFAULTS["wrist_align"])
+    smooth: float = float(_REWARD_DEFAULTS["smooth"])
+    affordance_sdf: float = float(_REWARD_DEFAULTS["affordance_sdf"])
+    affordance_sdf_decay: float = float(_REWARD_DEFAULTS["affordance_sdf_decay"])
+    non_affordance_sdf: float = float(_REWARD_DEFAULTS["non_affordance_sdf"])
+    wrist_lin_vel: float = float(_REWARD_DEFAULTS["wrist_lin_vel"])
+    wrist_ang_vel: float = float(_REWARD_DEFAULTS["wrist_ang_vel"])
+    obj_lin_vel: float = float(_REWARD_DEFAULTS["obj_lin_vel"])
+    obj_ang_vel: float = float(_REWARD_DEFAULTS["obj_ang_vel"])
 
 
 @configclass
 class GraspXLResetCfg:
-    max_lateral_distance: float = 0.2
-    max_vertical_offset: float = 0.2
+    max_lateral_distance: float = 1.0
+    max_vertical_offset: float = 1.0
+
+
+@configclass
+class GraspXLEventCfg(EventCfg):
+    physics_material = None
+    add_base_mass = None
+    reset_base = None
+    reset_robot_joints = None
+    push_robot = None
 
 
 @configclass
 class GraspXLGraspSceneCfg(BaseSceneCfg):
     scene_cfg_cls: type = GraspSceneCfg
     seed: int = 42
-    max_episode_length_s: float = 8.0
+    max_episode_length_s: float = 20.0
     num_envs: int = 4
     env_spacing: float = 2.0
     terrain_type: str = "plane"
@@ -59,6 +112,8 @@ class GraspXLGraspSceneCfg(BaseSceneCfg):
             pass
 
         spawn_cfg = self.spawn
+
+        override_object_info = load_spawn_from_yaml(spawn_cfg)
 
         if spawn_cfg.table.enable:
             table_spawn = sim_utils.CuboidCfg(
@@ -86,7 +141,26 @@ class GraspXLGraspSceneCfg(BaseSceneCfg):
         else:
             self.table = None
 
-        if spawn_cfg.grasp_object.enable:
+        static_usd = getattr(spawn_cfg.grasp_object, "static_usd", None)
+        if spawn_cfg.grasp_object.enable and static_usd is not None:
+            usd_spawn = sim_utils.UsdFileCfg(
+                usd_path=static_usd,
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    disable_gravity=spawn_cfg.grasp_object.disable_gravity,
+                    max_depenetration_velocity=3.0,
+                ),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+            )
+            self.grasp_object = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Object",
+                spawn=usd_spawn,
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=spawn_cfg.grasp_object.pos,
+                    rot=spawn_cfg.grasp_object.rot,
+                ),
+            )
+        elif spawn_cfg.grasp_object.enable:
+            # fallback to simple cuboid if no static USD was provided
             object_spawn = sim_utils.CuboidCfg(
                 size=spawn_cfg.grasp_object.size,
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -112,6 +186,11 @@ class GraspXLGraspSceneCfg(BaseSceneCfg):
         else:
             self.grasp_object = None
 
+        log_debug(
+            "GraspXLGraspSceneCfg ready (object=%s)"
+            % getattr(self.spawn.grasp_object, "object_id", None)
+        )
+
 
 @configclass
 class GraspXLEnvCfg:
@@ -124,7 +203,7 @@ class GraspXLEnvCfg:
         terminate_contacts_body_names=[],
         feet_body_names=[],
     )
-    reward: GraspXLGraspRewardCfg = GraspXLGraspRewardCfg()
+    reward: RewardCfg = RewardCfg()
     reward_scales: GraspXLRewardCfg = GraspXLRewardCfg()
     reset_cfg: GraspXLResetCfg = GraspXLResetCfg()
     normalization: NormalizationCfg = NormalizationCfg()
@@ -146,70 +225,21 @@ class GraspXLEnvCfg:
     )
     sim: SimCfg = SimCfg(dt=1 / 120.0, decimation=2)
 
-
-def compute_reward(env):
-    reward_cfg = env.cfg.reward_scales
-    logs: dict[str, torch.Tensor] = {}
-
-    if env.obj is None:
-        reward = torch.zeros(env.num_envs, device=env.device, dtype=env.robot.data.root_pos_w.dtype)
-        logs["reward/approach"] = reward.detach().cpu()
-        logs["reward/lift"] = reward.detach().cpu()
-        logs["reward/hold"] = reward.detach().cpu()
-        return reward, logs
-
-    hand_pos = _palm_pos(env)
-    obj_pos = env.obj.data.root_pos_w
-
-    dist = torch.linalg.norm(obj_pos - hand_pos, dim=1)
-    r_reach = reward_cfg.reach * torch.exp(-reward_cfg.reach_exponent * dist)
-    logs["reward/approach"] = r_reach.detach().cpu()
-
-    # Debug: expose the first environment's hand/object positions to help diagnose flat rewards.
-    # To re-enable console logging, uncomment the block below.
-    #
-    # if env.sim_step_counter % env.cfg.sim.decimation == 0:
-    #     hand0 = hand_pos[0].detach().cpu()
-    #     obj0 = obj_pos[0].detach().cpu()
-    #     print(
-    #         f"[DEBUG][GraspXL] step={env.sim_step_counter} "
-    #         f"hand_env0={hand0.tolist()} obj_env0={obj0.tolist()}"
-    #     )
-
-    for idx, axis in enumerate("xyz"):
-        logs[f"debug/hand_pos_env0_{axis}"] = hand_pos[0, idx].detach().cpu()
-        logs[f"debug/object_pos_env0_{axis}"] = obj_pos[0, idx].detach().cpu()
-
-    if env.table is not None:
-        table_z = env.table.data.root_pos_w[:, 2] + env._table_thickness * 0.5
-        object_bottom = obj_pos[:, 2] + env._current_lowest
-        lifted = object_bottom > (table_z + reward_cfg.lift_height_buffer)
-    else:
-        lifted = obj_pos[:, 2] > reward_cfg.ground_lift_height
-    r_lift = reward_cfg.lift * lifted.float()
-    logs["reward/lift"] = r_lift.detach().cpu()
-
-    env._hold_counter = torch.where(lifted, env._hold_counter + 1, torch.zeros_like(env._hold_counter))
-    sustained = env._hold_counter > reward_cfg.hold_duration
-    r_hold = reward_cfg.hold * sustained.float()
-    logs["reward/hold"] = r_hold.detach().cpu()
-
-    reward = r_reach + r_lift + r_hold
-    return reward, logs
-
-
-def _palm_pos(env):
-    tf = getattr(env.hand.data, "link_tf_w", None)
-    if tf is not None and tf.ndim == 3 and tf.shape[1] > 0:
-        return tf[:, 0, :3]
-    return env.hand.data.root_pos_w
+    def __post_init__(self):
+        log_debug(f"GraspXLEnvCfg ready (device={self.device})")
 
 
 @configclass
 class GraspXLAgentCfg(BaseAgentCfg):
-    num_steps_per_env = 32
-    max_iterations = 1000
+    num_steps_per_env = 150
+    max_iterations = 10000
     runner_class_name = "OnPolicyRunner"
     experiment_name = "graspxl_grasp"
     run_name = ""
     logger = "tensorboard"
+
+    def __post_init__(self):
+        log_debug(
+            "GraspXLAgentCfg ready (steps_per_env=%d, max_iterations=%d)"
+            % (self.num_steps_per_env, self.max_iterations)
+        )

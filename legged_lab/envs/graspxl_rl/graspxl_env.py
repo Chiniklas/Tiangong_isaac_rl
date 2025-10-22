@@ -1,22 +1,16 @@
 # legged_lab/envs/graspxl_rl/graspxl_env.py
 
-import random
 from typing import Optional
 
+import numpy as np
 import torch
-import isaaclab.sim as sim_utils
 from isaaclab.utils.buffers import DelayBuffer
 from isaaclab.utils.math import quat_apply, quat_conjugate, quat_mul
 from legged_lab.envs.base.base_env import BaseEnv
-from legged_lab.assets.inspirehand.object_library import GraspObjectLibrary, GraspObjectInfo
-from .graspxl_cfg import GraspXLEnvCfg, compute_reward
-from .grasp_helpers import (
-    apply_object_info,
-    apply_palm_motion,
-    sample_object_info,
-    sample_sdf_grid,
-    warp_hand_to_default,
-)
+from legged_lab.assets.inspirehand.object_library import GraspObjectInfo
+from .graspxl_cfg import GraspXLEnvCfg
+from .grasp_helpers import compute_reward, apply_palm_motion, sample_sdf_grid, warp_hand_to_default
+from .logging_utils import log_debug
 
 
 class GraspXLEnv(BaseEnv):
@@ -32,13 +26,22 @@ class GraspXLEnv(BaseEnv):
     ):
         self.render_mode = render_mode
 
-        self._object_library = GraspObjectLibrary()
-        self._object_infos = tuple(info for info in self._object_library.all_objects() if info.static_usd)
-        if not self._object_infos:
+        # The spawn configuration resolves the object metadata (static USD path,
+        # preloaded affordance/non-affordance SDF arrays, lowest point, etc.)
+        # before the environment is constructed. Here we simply grab that
+        # metadata; if it is missing the environment cannot function, so we
+        # raise immediately instead of attempting a fallback to the legacy
+        # object library.
+        object_info = getattr(cfg.scene.spawn, "_override_object_info", None)
+        if object_info is None:
             raise RuntimeError(
-                "No converted grasp objects found. Run the USD conversion tool before constructing the environment."
+                "No object override provided. Ensure cfg.scene.spawn.config_path points to a YAML specifying 'object_dir'."
             )
-        self._object_rng = random.Random(cfg.scene.seed)
+
+        self._current_object: Optional[GraspObjectInfo] = object_info
+        self._aff_sdf_data_np = cfg.scene.spawn.grasp_object.affordance_sdf_data
+        self._non_sdf_data_np = cfg.scene.spawn.grasp_object.non_affordance_sdf_data
+
         self._default_object_pos = tuple(cfg.scene.grasp_object.init_state.pos)
         self._default_object_rot = tuple(cfg.scene.grasp_object.init_state.rot)
         if cfg.scene.table is not None:
@@ -48,16 +51,16 @@ class GraspXLEnv(BaseEnv):
             self._table_thickness = 0.0
             self._default_table_surface = 0.0
         self._object_clearance = 0.01
-        self._current_object: Optional[GraspObjectInfo] = None
-        self._current_lowest = 0.0
-        self._initial_object_info = sample_object_info(self)
-        cfg.scene.grasp_object.spawn = sim_utils.UsdFileCfg(
-            usd_path=self._initial_object_info.static_usd.as_posix(),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=False, max_depenetration_velocity=3.0),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-        )
-        cfg.scene.grasp_object.init_state.pos = tuple(self._default_object_pos)
-        cfg.scene.grasp_object.init_state.rot = tuple(self._default_object_rot)
+        lowest = object_info.lowest_point
+        if lowest is None:
+            lowest = cfg.scene.spawn.grasp_object.lowest_point
+        if lowest is None:
+            lowest = 0.0
+        self._current_lowest = float(lowest if lowest <= 0.0 else -lowest)
+        if cfg.scene.spawn.grasp_object.pos is not None:
+            self._default_object_pos = tuple(cfg.scene.spawn.grasp_object.pos)
+        if cfg.scene.spawn.grasp_object.rot is not None:
+            self._default_object_rot = tuple(cfg.scene.spawn.grasp_object.rot)
 
         if headless is None:
             if isinstance(render_mode, bool):
@@ -66,6 +69,9 @@ class GraspXLEnv(BaseEnv):
                 headless = render_mode is None
 
         super().__init__(cfg, headless)
+        log_debug(
+            f"GraspXLEnv initialized (num_envs={self.num_envs}, object={object_info.object_id})"
+        )
 
         # Always present
         self.hand  = self.scene["robot"]
@@ -74,18 +80,7 @@ class GraspXLEnv(BaseEnv):
 
         self._hand_spawn_cfg = cfg.scene.spawn.hand
         self._default_hand_state = self.robot.data.root_state_w.clone()
-        root_offset = getattr(self._hand_spawn_cfg, "root_link_offset", (0.0, 0.0, 0.0))
-        self._hand_root_offset = torch.tensor(
-            root_offset,
-            dtype=self._default_hand_state.dtype,
-            device=self.device,
-        )
-        if self._hand_spawn_cfg.align_to_object:
-            hand_target_x = float(self._default_object_pos[0] + self._hand_spawn_cfg.offset_from_object[0])
-            hand_target_y = float(self._default_object_pos[1] + self._hand_spawn_cfg.offset_from_object[1])
-        else:
-            hand_target_x = float(self._hand_spawn_cfg.base_pos[0])
-            hand_target_y = float(self._hand_spawn_cfg.base_pos[1])
+        self._hand_root_offset = torch.zeros(3, dtype=self._default_hand_state.dtype, device=self.device)
         self._zero_root_vel = torch.zeros(self.num_envs, 6, device=self.device)
         self._aff_sdf_grid = None
         self._aff_sdf_min = None
@@ -95,7 +90,9 @@ class GraspXLEnv(BaseEnv):
         self._non_sdf_max = None
         self._latest_aff_sdf = None
         self._latest_non_sdf = None
-        apply_object_info(self, self._initial_object_info, initial=True)
+
+        self._initialize_sdf_buffers()
+        self._set_object_pose()
 
         fingertip_patterns = ["Link48", "Link4", "Link14", "Link24", "Link34"]
         tip_indices, tip_names = self.hand.find_bodies(name_keys=fingertip_patterns, preserve_order=True)
@@ -120,19 +117,10 @@ class GraspXLEnv(BaseEnv):
             self._default_table_surface = float(self._default_object_pos[2])
 
         # orient palm parallel to table and hover slightly above the surface
-        if self._hand_spawn_cfg.align_to_object:
-            base_height = self._default_table_surface if self.table is not None else float(self._default_object_pos[2])
-            hover_height = (
-                base_height
-                + self._hand_spawn_cfg.hover_above_table
-                + self._hand_spawn_cfg.offset_from_object[2]
-            )
-        else:
-            hover_height = float(self._hand_spawn_cfg.base_pos[2])
-        target_pos = self._default_hand_state.new_tensor([hand_target_x, hand_target_y, hover_height])
+        target_pos = self._default_hand_state.new_tensor([0.0, 0.0, 0.75])
         self._default_hand_state[:, :3] = target_pos - self._hand_root_offset
         palm_down_xyzw = torch.tensor(
-            self._hand_spawn_cfg.orientation_xyzw,
+            (0.0, 0.70710678, 0.0, 0.70710678),
             dtype=self._default_hand_state.dtype,
             device=self.device,
         ).repeat(self.num_envs, 1)
@@ -168,6 +156,58 @@ class GraspXLEnv(BaseEnv):
         self.init_obs_buffer()
 
         self._hold_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+
+    def _initialize_sdf_buffers(self) -> None:
+        """Convert cached numpy SDF data into device tensors."""
+
+        def _as_tensor(array: Optional[np.ndarray]) -> Optional[torch.Tensor]:
+            if array is None:
+                return None
+            return torch.from_numpy(array).to(device=self.device, dtype=torch.float32)
+
+        aff_data = getattr(self, "_aff_sdf_data_np", None)
+        if aff_data is not None:
+            self._aff_sdf_grid = _as_tensor(aff_data.get("grid"))
+            self._aff_sdf_min = _as_tensor(aff_data.get("min_bounds"))
+            self._aff_sdf_max = _as_tensor(aff_data.get("max_bounds"))
+        else:
+            self._aff_sdf_grid = None
+            self._aff_sdf_min = None
+            self._aff_sdf_max = None
+
+        non_data = getattr(self, "_non_sdf_data_np", None)
+        if non_data is not None:
+            self._non_sdf_grid = _as_tensor(non_data.get("grid"))
+            self._non_sdf_min = _as_tensor(non_data.get("min_bounds"))
+            self._non_sdf_max = _as_tensor(non_data.get("max_bounds"))
+        else:
+            self._non_sdf_grid = None
+            self._non_sdf_min = None
+            self._non_sdf_max = None
+
+        self._latest_aff_sdf = None
+        self._latest_non_sdf = None
+
+    def _set_object_pose(self) -> None:
+        """Place the grasp object above the table with configured clearance."""
+
+        if self.obj is None:
+            return
+
+        dtype = self.obj.data.root_pos_w.dtype
+        origins = self.scene.env_origins.to(device=self.device, dtype=dtype)
+        base_x, base_y, _ = self._default_object_pos
+        z_pos = self._default_table_surface - self._current_lowest + self._object_clearance
+
+        target_pos = torch.tensor([base_x, base_y, z_pos], device=self.device, dtype=dtype)
+        pose = torch.zeros((self.num_envs, 7), device=self.device, dtype=dtype)
+        pose[:, :3] = origins + target_pos
+        quat_xyzw = torch.tensor(self._default_object_rot, device=self.device, dtype=dtype).unsqueeze(0)
+        pose[:, 3:7] = quat_xyzw.repeat(self.num_envs, 1)
+
+        self.obj.write_root_pose_to_sim(pose)
+        zero_vel = torch.zeros((self.num_envs, 6), device=self.device, dtype=dtype)
+        self.obj.write_root_velocity_to_sim(zero_vel)
 
     # ---------- observations ----------
     def compute_current_observations(self):

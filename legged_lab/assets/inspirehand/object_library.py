@@ -11,10 +11,10 @@ can be integrated incrementally.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 import json
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Sequence
+from typing import Any, Dict, Iterable, Optional, Sequence
 
 
 DEFAULT_DATASET_ROOT = Path("dataset") / "mixed_train"
@@ -53,6 +53,8 @@ class GraspObjectInfo:
     non_affordance_usd: Optional[Path] = None
     affordance_sdf: Optional[Path] = None
     non_affordance_sdf: Optional[Path] = None
+    affordance_sdf_data: Optional[dict[str, Any]] = field(default=None, repr=False, compare=False)
+    non_affordance_sdf_data: Optional[dict[str, Any]] = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> Dict[str, object]:
         """Convert to a serialisable dictionary with POSIX-style paths."""
@@ -69,6 +71,8 @@ class GraspObjectInfo:
         data["static_usd"] = _maybe_path(self.static_usd)
         data["affordance_usd"] = _maybe_path(self.affordance_usd)
         data["non_affordance_usd"] = _maybe_path(self.non_affordance_usd)
+        data.pop("affordance_sdf_data", None)
+        data.pop("non_affordance_sdf_data", None)
         return data
 
 

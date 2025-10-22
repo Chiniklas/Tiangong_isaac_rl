@@ -1,84 +1,15 @@
 from __future__ import annotations
 
-import math
-from pathlib import Path
-from typing import Optional
+from typing import Dict, Tuple
 
-import numpy as np
 import torch
 from isaaclab.utils.math import quat_mul
 
-from legged_lab.assets.inspirehand.object_library import GraspObjectInfo
-
-
-def sample_object_info(env) -> GraspObjectInfo:
-    """Return a random grasp object metadata entry."""
-
-    return env._object_rng.choice(env._object_infos)
-
-
-def apply_object_info(env, info: GraspObjectInfo, *, initial: bool = False) -> None:
-    """Configure the current grasp object and update cached properties."""
-
-    env._current_object = info
-    load_object_sdfs(env, info)
-
-    lowest = info.lowest_point if info.lowest_point is not None else None
-    if lowest is None and env._non_sdf_min is not None:
-        lowest = float(env._non_sdf_min[2].detach().cpu())
-    if lowest is None and env._aff_sdf_min is not None:
-        lowest = float(env._aff_sdf_min[2].detach().cpu())
-    if lowest is None:
-        lowest = 0.0
-    env._current_lowest = float(lowest if lowest <= 0.0 else -lowest)
-
-    base_x, base_y, _ = env._default_object_pos
-    # Always reset to the default pose so preview runs remain deterministic.
-    dx = dy = 0.0
-    yaw = 0.0
-
-    table_surface = env._default_table_surface
-    z_pos = table_surface - env._current_lowest + env._object_clearance
-
-    dtype = env._zero_root_vel.dtype
-    pos_offset = torch.tensor([base_x + dx, base_y + dy, z_pos], device=env.device, dtype=dtype)
-    origins = env.scene.env_origins.to(device=env.device, dtype=dtype)
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
-    quat_xyzw = torch.tensor([0.0, 0.0, sy, cy], device=env.device, dtype=dtype)
-
-    pose = torch.zeros((env.num_envs, 7), device=env.device, dtype=dtype)
-    pose[:, :3] = origins + pos_offset
-    pose[:, 3:] = quat_xyzw
-    env.obj.write_root_pose_to_sim(pose)
-
-    vel = torch.zeros((env.num_envs, 6), device=env.device, dtype=dtype)
-    env.obj.write_root_velocity_to_sim(vel)
-
-
-def load_object_sdfs(env, info: GraspObjectInfo) -> None:
-    """Load affordance / non-affordance SDF grids for the current object."""
-
-    def _load(path: Optional[Path]):
-        if path is None or not path.exists():
-            return None, None, None
-        data = np.load(path)
-        grid = torch.from_numpy(data["sdf"]).to(env.device)
-        min_bounds = torch.from_numpy(data["min_bounds"]).to(env.device).float()
-        max_bounds = torch.from_numpy(data["max_bounds"]).to(env.device).float()
-        return grid, min_bounds, max_bounds
-
-    env._aff_sdf_grid, env._aff_sdf_min, env._aff_sdf_max = _load(info.affordance_sdf)
-    env._non_sdf_grid, env._non_sdf_min, env._non_sdf_max = _load(info.non_affordance_sdf)
-    env._latest_aff_sdf = None
-    env._latest_non_sdf = None
+from legged_lab.mdp import rewards_graspxl as reward_terms
 
 
 def warp_hand_to_default(env, env_ids) -> None:
     """Teleport the Inspire Hand root to the cached default pose."""
-
-    if not hasattr(env, "_default_hand_state"):
-        return
 
     if isinstance(env_ids, torch.Tensor):
         indices = env_ids.to(torch.long)
@@ -91,12 +22,14 @@ def warp_hand_to_default(env, env_ids) -> None:
         return
 
     root_state = env.robot.data.root_state_w.clone()
-    default_state = env._default_hand_state.clone()
-    origins = env.scene.env_origins.to(device=env.device, dtype=default_state.dtype)
-    default_state[:, :3] = origins + default_state[:, :3]
-    root_state[indices] = default_state[indices]
+    origins = env.scene.env_origins.to(device=env.device, dtype=root_state.dtype)
+    base_pos = torch.tensor([0.0, 0.0, 0.75], device=env.device, dtype=root_state.dtype)
+    base_rot = torch.tensor([0.0, 0.70710678, 0.0, 0.70710678], device=env.device, dtype=root_state.dtype)
+    root_state[indices, :3] = origins[indices] + base_pos
+    root_state[indices, 3:7] = base_rot.unsqueeze(0).expand(indices.numel(), -1)
     env.robot.write_root_pose_to_sim(root_state[indices, :7], env_ids=indices)
-    env.robot.write_root_velocity_to_sim(env._zero_root_vel[indices], env_ids=indices)
+    zero_vel = torch.zeros((indices.numel(), 6), device=env.device, dtype=root_state.dtype)
+    env.robot.write_root_velocity_to_sim(zero_vel, env_ids=indices)
 
 
 def apply_palm_motion(env, palm_trans: torch.Tensor, palm_rot: torch.Tensor) -> None:
@@ -179,3 +112,62 @@ def sample_sdf_grid(
     c0 = c00 * (1 - fy) + c10 * fy
     c1 = c01 * (1 - fy) + c11 * fy
     return c0 * (1 - fz) + c1 * fz
+
+
+def compute_reward(env) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    reward_cfg = env.cfg.reward_scales
+    logs: Dict[str, torch.Tensor] = {}
+
+    if env.obj is None:
+        reward = torch.zeros(env.num_envs, device=env.device, dtype=env.robot.data.root_pos_w.dtype)
+        logs["reward/approach"] = reward.detach().cpu()
+        logs["reward/lift"] = reward.detach().cpu()
+        logs["reward/hold"] = reward.detach().cpu()
+        logs["reward/wrist_lin_vel"] = reward.detach().cpu()
+        logs["reward/wrist_ang_vel"] = reward.detach().cpu()
+        logs["reward/obj_lin_vel"] = reward.detach().cpu()
+        logs["reward/obj_ang_vel"] = reward.detach().cpu()
+        return reward, logs
+
+    hand_pos = reward_terms.palm_world_position(env)
+    obj_pos = env.obj.data.root_pos_w
+
+    r_reach = reward_cfg.reach * reward_terms.reach_success(env, reward_cfg.reach_exponent)
+    logs["reward/approach"] = r_reach.detach().cpu()
+
+    for idx, axis in enumerate("xyz"):
+        logs[f"debug/hand_pos_env0_{axis}"] = hand_pos[0, idx].detach().cpu()
+        logs[f"debug/object_pos_env0_{axis}"] = obj_pos[0, idx].detach().cpu()
+
+    lifted = reward_terms.object_lifted(
+        env,
+        reward_cfg.lift_height_buffer,
+        ground_height=reward_cfg.ground_lift_height,
+    )
+    r_lift = reward_cfg.lift * lifted
+    logs["reward/lift"] = r_lift.detach().cpu()
+
+    sustained = reward_terms.hold_success(env, lifted, min_duration=reward_cfg.hold_duration)
+    r_hold = reward_cfg.hold * sustained
+    logs["reward/hold"] = r_hold.detach().cpu()
+
+    r_wrist_lin = reward_cfg.wrist_lin_vel * reward_terms.wrist_linear_velocity_penalty(env)
+    r_wrist_ang = reward_cfg.wrist_ang_vel * reward_terms.wrist_angular_velocity_penalty(env)
+    r_obj_lin = reward_cfg.obj_lin_vel * reward_terms.object_linear_velocity_penalty(env)
+    r_obj_ang = reward_cfg.obj_ang_vel * reward_terms.object_angular_velocity_penalty(env)
+
+    logs["reward/wrist_lin_vel"] = r_wrist_lin.detach().cpu()
+    logs["reward/wrist_ang_vel"] = r_wrist_ang.detach().cpu()
+    logs["reward/obj_lin_vel"] = r_obj_lin.detach().cpu()
+    logs["reward/obj_ang_vel"] = r_obj_ang.detach().cpu()
+
+    reward = r_reach + r_lift + r_hold + r_wrist_lin + r_wrist_ang + r_obj_lin + r_obj_ang
+    return reward, logs
+
+
+__all__ = [
+    "warp_hand_to_default",
+    "apply_palm_motion",
+    "sample_sdf_grid",
+    "compute_reward",
+]
