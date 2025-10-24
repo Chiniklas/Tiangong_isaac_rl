@@ -166,12 +166,14 @@ After installation (`pip install -e .` inside an Isaac Lab-enabled interpreter) 
 
 ### Inspire Hand Tasks and Sanity Check Scripts
 - **Registered tasks:** `inspirehand_grasp`, `graspxl_rl`, `unigrasptransformer`.
-- **Quick checks:**
+- **Sanity checks (common):**
   - `python -m legged_lab.scripts.inspire_hand.tests.test_env_task_registration`
   - `python3 legged_lab/scripts/inspire_hand/tests/test_spawn_object_scene.py`
   - `python3 legged_lab/scripts/inspire_hand/tests/test_rl_agent.py`
+- **Quick checks (`graspxl_rl`):**
   - `python3 legged_lab/scripts/graspxl_rl/tests/test_spawn_scene.py`
   - `python3 legged_lab/scripts/graspxl_rl/tests/test_visualize_objective_tracking.py`
+- **Quick checks (`unigrasptransformer`):**
   - `python3 legged_lab/scripts/unigrasptransformer/tests/test_spawn_scene.py`
   - `python3 legged_lab/scripts/unigrasptransformer/tests/test_visualize_objective_tracking.py`
 - Shared utilities (keyboard controller, mesh conversion, SDF generation) live under `legged_lab/scripts/tools/`.
