@@ -1,4 +1,4 @@
-"""Minimal keyboard controller for GraspXL testing scripts."""
+"""Minimal keyboard controller shared by simulator preview scripts."""
 
 from __future__ import annotations
 
@@ -85,3 +85,6 @@ class KeyboardController:
 
     def __del__(self) -> None:  # pragma: no cover
         self.shutdown()
+
+
+__all__ = ["KeyboardController"]

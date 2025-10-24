@@ -11,13 +11,13 @@ Example usage (inside the Isaac Lab kit shell):
 
 ```
 cd ~/IsaacLab
-./isaaclab.sh --run python /path/to/repo/legged_lab/scripts/inspire_hand/tools/generate_sdf.py
+./isaaclab.sh --run python /path/to/repo/legged_lab/scripts/tools/generate_sdf.py
 ```
 
 To validate a specific object after generation:
 
 ```
-./isaaclab.sh --run python /path/to/repo/legged_lab/scripts/inspire_hand/tools/generate_sdf.py --validate Mug_46ed9dad0440c043d33646b0990bb4a_body
+./isaaclab.sh --run python /path/to/repo/legged_lab/scripts/tools/generate_sdf.py --validate Mug_46ed9dad0440c043d33646b0990bb4a_body
 ```
 """
 

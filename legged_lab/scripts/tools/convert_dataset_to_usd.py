@@ -10,7 +10,7 @@ Run this once after copying ``dataset/mixed_train`` (inside the Isaac Lab kit sh
 ``./isaaclab.sh --run python <path>/convert_dataset_to_usd.py``):
 
 ```
-python legged_lab/scripts/inspire_hand/tools/convert_dataset_to_usd.py
+python legged_lab/scripts/tools/convert_dataset_to_usd.py
 ```
 
 Converted USDs are written to ``dataset/grasp_usd/<object>/<object>_static.usd`` by default.

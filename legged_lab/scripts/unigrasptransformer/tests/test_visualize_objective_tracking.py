@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preview a configured GraspXL scene and visualise palm/object diagnostics."""
+"""Preview a configured UniGraspTransformer scene and visualise palm/object diagnostics."""
 
 from __future__ import annotations
 
@@ -97,21 +97,24 @@ def main():
 
     import torch
     from isaaclab.utils.math import quat_apply
-    from legged_lab.envs.graspxl_rl.graspxl_env import GraspXLEnv
-    from legged_lab.envs.graspxl_rl.graspxl_cfg import GraspXLEnvCfg, GraspXLGraspSceneCfg
-    from legged_lab.envs.graspxl_rl.spawn_cfg import GraspXLSpawnCfg
-    from legged_lab.envs.graspxl_rl.grasp_helpers import apply_palm_motion
+    from legged_lab.envs.unigrasptransformer.unigrasptransformer_env import UniGraspTransformerEnv
+    from legged_lab.envs.unigrasptransformer.unigrasptransformer_cfg import (
+        UniGraspTransformerEnvCfg,
+        UniGraspTransformerGraspSceneCfg,
+    )
+    from legged_lab.envs.unigrasptransformer.spawn_cfg import UniGraspTransformerSpawnCfg
+    from legged_lab.envs.unigrasptransformer.grasp_helpers import apply_palm_motion
     from legged_lab.scripts.tools.keyboard_controller import KeyboardController
 
     if args.config_yaml is not None:
-        spawn_cfg = GraspXLSpawnCfg(config_path=args.config_yaml.expanduser().resolve().as_posix())
+        spawn_cfg = UniGraspTransformerSpawnCfg(config_path=args.config_yaml.expanduser().resolve().as_posix())
     else:
-        spawn_cfg = GraspXLSpawnCfg()
+        spawn_cfg = UniGraspTransformerSpawnCfg()
 
-    scene_cfg = GraspXLGraspSceneCfg(spawn=spawn_cfg, num_envs=args.num_envs)
-    env_cfg = GraspXLEnvCfg(scene=scene_cfg)
+    scene_cfg = UniGraspTransformerGraspSceneCfg(spawn=spawn_cfg, num_envs=args.num_envs)
+    env_cfg = UniGraspTransformerEnvCfg(scene=scene_cfg)
 
-    env = GraspXLEnv(env_cfg, headless=args.headless)
+    env = UniGraspTransformerEnv(env_cfg, headless=args.headless)
 
     palm_api, obj_api, palm_heading_curve, obj_heading_curve, afford_pts_prim = _setup_debug_prims()
 
