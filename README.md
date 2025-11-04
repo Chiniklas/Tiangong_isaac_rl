@@ -165,14 +165,22 @@ Our Inspire Hand stack follows the same layered architecture across GraspXL and 
 After installation (`pip install -e .` inside an Isaac Lab-enabled interpreter) run the tooling once to populate `dataset/grasp_usd/` and then import `legged_lab.envs` to register all tasks with the global registry.
 
 ### Inspire Hand Tasks and Sanity Check Scripts
-- **Registered tasks:** `inspirehand_grasp`, `graspxl_rl`, `unigrasptransformer`.
+- **Registered tasks:** `graspxl_rl`, `unigrasptransformer`.
 - **Quick checks (`graspxl_rl`):**
   - `python3 legged_lab/scripts/graspxl_rl/tests/test_spawn_scene.py`
   - `python3 legged_lab/scripts/graspxl_rl/tests/test_visualize_objective_tracking.py`
 - **Quick checks (`unigrasptransformer`):**
   - `python3 legged_lab/scripts/unigrasptransformer/tests/test_spawn_scene.py`
   - `python3 legged_lab/scripts/unigrasptransformer/tests/test_visualize_objective_tracking.py`
-- Shared utilities (keyboard controller, mesh conversion, SDF generation) live under `legged_lab/scripts/tools/`.
+- **Shared utilities:** live under `legged_lab/scripts/tools/`.
+  - `keyboard_controller.py` enables interactive palm translation and rotation in preview scripts (when rendering is on).
+    - Translation keys: `1/2` → ±X, `3/4` → ±Y, `5/6` → ±Z.
+    - Rotation keys (about root): `Q/W` → ±Rx, `E/R` → ±Ry, `T/Y` → ±Rz.
+    - It prints a one‑line hint when active. Values are per‑step offsets; scaling comes from env settings.
+  - `convert_dataset_to_usd.py` converts meshes to single‑rigid USDs for faster loading.
+  - `generate_sdf.py` builds affordance and non‑affordance SDF grids used by the rewards.
+
+For programmatic keyboard bindings inside environments, see `legged_lab/utils/keyboard.py` (R to reset all envs, plus simple custom key callbacks).
 
 ### Reward Shaping
 

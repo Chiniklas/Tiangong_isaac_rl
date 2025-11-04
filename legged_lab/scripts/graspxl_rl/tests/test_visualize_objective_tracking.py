@@ -43,6 +43,16 @@ def parse_args():
         default=3000,
         help="Maximum number of affordance surface points to render.",
     )
+    parser.add_argument(
+        "--no-rotation",
+        action="store_true",
+        help="Disable all keyboard-driven rotation controls (translation only).",
+    )
+    parser.add_argument(
+        "--legacy-keyboard",
+        action="store_true",
+        help="Use the legacy translation-only keyboard controller implementation.",
+    )
     return parser.parse_args()
 
 
@@ -117,7 +127,14 @@ def main():
 
     controller = None
     if not args.headless:
-        controller = KeyboardController()
+        if args.legacy_keyboard:
+            from legged_lab.scripts.tools.keyboard_controller_legacy import (
+                KeyboardControllerLegacy as KeyboardController,
+            )
+            controller = KeyboardController()
+        else:
+            from legged_lab.scripts.tools.keyboard_controller import KeyboardController
+            controller = KeyboardController(enable_rotation=not args.no_rotation)
 
     grid = getattr(env, "_aff_sdf_grid", None)
     if grid is not None:
@@ -146,11 +163,16 @@ def main():
         while True:
             if controller is not None:
                 dx, dy, dz = controller.translation
+                rx, ry, rz = controller.rotation
             else:
                 dx = dy = dz = 0.0
+                rx = ry = rz = 0.0
             palm_trans[:, 0] = dx
             palm_trans[:, 1] = dy
             palm_trans[:, 2] = dz
+            palm_rot[:, 0] = rx
+            palm_rot[:, 1] = ry
+            palm_rot[:, 2] = rz
             apply_palm_motion(env, palm_trans, palm_rot)
 
             env.step(actions)
@@ -161,7 +183,7 @@ def main():
             palm_api.SetTranslate(palm_pos.tolist())
             obj_api.SetTranslate(obj_pos.tolist())
 
-            palm_dir = quat_apply(env.hand.data.root_quat_w[0], torch.tensor([0.0, 0.0, 1.0], device=env.device)).detach().cpu().numpy()
+            palm_dir = quat_apply(env.hand.data.root_quat_w[0], torch.tensor([-1.0, 0.0, 0.0], device=env.device)).detach().cpu().numpy()
             obj_dir = quat_apply(env.obj.data.root_quat_w[0], torch.tensor([0.0, 0.0, 1.0], device=env.device)).detach().cpu().numpy()
 
             palm_line = [palm_pos, palm_pos + 0.12 * palm_dir]

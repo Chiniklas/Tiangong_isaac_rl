@@ -53,7 +53,7 @@ task_registry.register(
     GraspXLAgentCfg(),
 )
 
-from legged_lab.envs.unigrasptransformer.unigrasptransformer_env import (
+from legged_lab.envs.unigrasptransformer import (
     UniGraspTransformerEnv,
     UniGraspTransformerEnvCfg,
     UniGraspTransformerAgentCfg,
