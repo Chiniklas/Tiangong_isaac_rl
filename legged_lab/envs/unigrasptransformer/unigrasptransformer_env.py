@@ -303,7 +303,9 @@ class UniGraspTransformerEnv(BaseEnv):
             self.extras.setdefault("info", {})
             self.extras["info"]["grasp/object_id"] = self._current_object.object_id
         # If object_init metadata is available, apply an initial rotation (and optional pos) for these envs
-        if self._object_init_np is not None and len(env_ids) > 0 and self.obj is not None:
+        # During __init__, BaseEnv may call reset() before self.obj is assigned.
+        # Use getattr to avoid attribute errors in that early call.
+        if self._object_init_np is not None and len(env_ids) > 0 and getattr(self, "obj", None) is not None:
             try:
                 import numpy as _np
                 ids = env_ids.to(dtype=torch.long, device=self.device)

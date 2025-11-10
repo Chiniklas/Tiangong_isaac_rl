@@ -98,6 +98,18 @@ def parse_args():
         default="core",
         help="Category inside the subset to sample from (e.g., core/sem/ddg/mujoco)",
     )
+    parser.add_argument(
+        "--show-pc",
+        action="store_true",
+        default=True,
+        help="Show point-cloud overlay from metadata.pc_fps (default: on)",
+    )
+    parser.add_argument(
+        "--pc-max",
+        type=int,
+        default=4096,
+        help="Max points to display from pc_fps to keep UI responsive.",
+    )
     # No separate USD root needed when USDs are written into subset object folders
     return parser.parse_args()
 
@@ -170,6 +182,10 @@ def main():
         spawn_cfg.grasp_object.non_affordance_sdf = None
         spawn_cfg.grasp_object.affordance_sdf_data = None
         spawn_cfg.grasp_object.non_affordance_sdf_data = None
+        # Attach optional dataset helpers for visualization/reset behavior
+        spawn_cfg.grasp_object.pc_fps = metadata.get("pc_fps")
+        spawn_cfg.grasp_object.pca_axes = metadata.get("pca_axes")
+        spawn_cfg.grasp_object.object_init = metadata.get("object_init")
 
         override = GraspObjectInfo(
             object_id=chosen_dir.name,
@@ -199,42 +215,53 @@ def main():
 
     print(f"[INFO] Spawned UniGraspTransformer object: {spawned_name}")
 
-    # Overlay point cloud if metadata provides pc_fps
-    try:
-        import numpy as _np
-        import omni.usd
-        from pxr import Gf, UsdGeom
+    # Prepare point cloud overlay (loaded once, updated each frame)
+    pc_local = None
+    pc_prim = None
+    if args.show_pc:
+        try:
+            import numpy as _np
+            import omni.usd
+            from pxr import Gf, UsdGeom
 
-        pc_path = getattr(spawn_cfg.grasp_object, "pc_fps", None)
-        if pc_path:
-            pts_local = _np.load(pc_path).astype(_np.float32)
-            # Transform to world
-            obj_pos = env.obj.data.root_pos_w[0].detach().cpu().numpy()
-            obj_quat = env.obj.data.root_quat_w[0].detach().cpu().numpy()  # xyzw
-            # Convert quaternion to rotation matrix
-            import math
-
-            x, y, z, w = obj_quat
-            R = _np.array([
-                [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-            ], dtype=_np.float32)
-            pts_world = (pts_local @ R.T) + obj_pos[None, :]
-
-            stage = omni.usd.get_context().get_stage()
-            UsdGeom.Xform.Define(stage, "/World/Debug")
-            pc_prim = UsdGeom.Points.Define(stage, "/World/Debug/ObjectPC")
-            pc_prim.CreateWidthsAttr([0.003])
-            pc_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.1, 0.9, 0.9)])
-            pc_prim.GetPointsAttr().Set([Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_world])
-    except Exception as _e:
-        print(f"[WARN] Point cloud overlay failed: {_e}")
+            pc_path = getattr(spawn_cfg.grasp_object, "pc_fps", None)
+            if pc_path:
+                pc_data = _np.load(pc_path).astype(_np.float32)
+                # Downsample if huge
+                if pc_data.shape[0] > args.pc_max:
+                    sel = _np.random.permutation(pc_data.shape[0])[: args.pc_max]
+                    pc_data = pc_data[sel]
+                pc_local = pc_data
+                stage = omni.usd.get_context().get_stage()
+                UsdGeom.Xform.Define(stage, "/World/Debug")
+                pc_prim = UsdGeom.Points.Define(stage, "/World/Debug/ObjectPC")
+                pc_prim.CreateWidthsAttr([0.004])
+                pc_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.15, 0.85, 0.95)])
+        except Exception as _e:
+            print(f"[WARN] Point cloud init failed: {_e}")
 
     actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
     try:
         while True:
             env.step(actions)
+
+            # Update PC overlay every frame
+            if pc_local is not None and pc_prim is not None:
+                try:
+                    from pxr import Gf
+                    import numpy as _np
+                    # Transform local PC by current object pose
+                    obj_pos = env.obj.data.root_pos_w[0].detach().cpu().numpy()
+                    ox, oy, oz, ow = env.obj.data.root_quat_w[0].detach().cpu().numpy()  # xyzw
+                    R = _np.array([
+                        [1 - 2 * (oy * oy + oz * oz), 2 * (ox * oy - oz * ow), 2 * (ox * oz + oy * ow)],
+                        [2 * (ox * oy + oz * ow), 1 - 2 * (ox * ox + oz * oz), 2 * (oy * oz - ox * ow)],
+                        [2 * (ox * oz - oy * ow), 2 * (oy * oz + ox * ow), 1 - 2 * (ox * ox + oy * oy)],
+                    ], dtype=_np.float32)
+                    pts_world = (pc_local @ R.T) + obj_pos[None, :]
+                    pc_prim.GetPointsAttr().Set([Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_world])
+                except Exception:
+                    pass
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted by user. Shutting down...")
 
