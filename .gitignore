@@ -8,3 +8,4 @@ wandb
 MUJOCO_LOG.TXT
 .history
 reference/
+dataset/
