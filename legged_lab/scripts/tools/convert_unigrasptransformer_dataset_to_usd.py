@@ -160,9 +160,14 @@ def _bundle_static_usd(mesh_usd_paths: list[Path], out_dir: Path, object_name: s
     root_xform = UsdGeom.Xform.Define(stage, "/Object")
     stage.SetDefaultPrim(root_xform.GetPrim())
 
+    import os as _os
     for idx, mesh_usd in enumerate(mesh_usd_paths):
         part_prim = stage.DefinePrim(f"/Object/part_{idx}", "Xform")
-        part_prim.GetReferences().AddReference(mesh_usd.as_posix())
+        try:
+            rel_path = _os.path.relpath(mesh_usd.as_posix(), out_dir.as_posix()).replace("\\", "/")
+        except Exception:
+            rel_path = mesh_usd.as_posix()
+        part_prim.GetReferences().AddReference(rel_path)
 
     # Apply RigidBody properties so Isaac Lab's RigidObject can find a rigid body
     schemas.define_rigid_body_properties(
@@ -238,16 +243,12 @@ def main():
             else:
                 out_dir = usd_root / obj_dir.name
 
-            # 1) Convert mesh to USD
-            mesh_usd = _convert_obj_to_usd(mesh_path, out_dir, args.force)
+            # 1) Convert mesh to USD into a parts/ folder so the static stage can reference it
+            parts_dir = out_dir / "parts"
+            mesh_usd = _convert_obj_to_usd(mesh_path, parts_dir, args.force)
             # 2) Bundle into a static rigid USD that references the mesh
             static_usd = _bundle_static_usd([mesh_usd], out_dir, obj_dir.name, args.force)
-            # Optionally remove the intermediate mesh USD to keep only one file per object
-            if not args.keep_mesh_usd:
-                try:
-                    mesh_usd.unlink(missing_ok=True)
-                except Exception:
-                    pass
+            # Keep mesh_usd — static_usd references it.
 
             # Write minimal metadata.json next to the USD
             metadata = {"static_usd": static_usd.as_posix(), "affordance_usd": None, "non_affordance_usd": None}

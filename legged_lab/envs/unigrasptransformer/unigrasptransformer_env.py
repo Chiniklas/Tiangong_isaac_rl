@@ -10,7 +10,7 @@ from legged_lab.envs.base.base_env import BaseEnv
 from legged_lab.assets.inspirehand.object_library import GraspObjectInfo
 
 from .unigrasptransformer_cfg import UniGraspTransformerEnvCfg
-from .grasp_helpers import compute_reward, apply_palm_motion, sample_sdf_grid, warp_hand_to_default
+from .grasp_helpers import compute_reward, apply_palm_motion, warp_hand_to_default
 from .logging_utils import log_debug
 
 
@@ -34,8 +34,25 @@ class UniGraspTransformerEnv(BaseEnv):
             )
 
         self._current_object: Optional[GraspObjectInfo] = object_info
-        self._aff_sdf_data_np = cfg.scene.spawn.grasp_object.affordance_sdf_data
-        self._non_sdf_data_np = cfg.scene.spawn.grasp_object.non_affordance_sdf_data
+        # Optional dataset helpers
+        self._pc_fps_path = getattr(cfg.scene.spawn.grasp_object, "pc_fps", None)
+        self._pca_axes_path = getattr(cfg.scene.spawn.grasp_object, "pca_axes", None)
+        self._object_init_path = getattr(cfg.scene.spawn.grasp_object, "object_init", None)
+        self._pc_fps_np = None
+        self._pca_axes_np = None
+        self._object_init_np = None
+        try:
+            import numpy as _np
+            if self._pc_fps_path:
+                self._pc_fps_np = _np.load(self._pc_fps_path)
+            if self._pca_axes_path:
+                self._pca_axes_np = _np.load(self._pca_axes_path)
+            if self._object_init_path:
+                import pickle as _pkl
+                with open(self._object_init_path, "rb") as _f:
+                    self._object_init_np = _pkl.load(_f)
+        except Exception:
+            pass
 
         self._default_object_pos = tuple(cfg.scene.grasp_object.init_state.pos)
         self._default_object_rot = tuple(cfg.scene.grasp_object.init_state.rot)
@@ -76,6 +93,8 @@ class UniGraspTransformerEnv(BaseEnv):
         self._default_hand_state = self.robot.data.root_state_w.clone()
         self._hand_root_offset = torch.zeros(3, dtype=self._default_hand_state.dtype, device=self.device)
         self._zero_root_vel = torch.zeros(self.num_envs, 6, device=self.device)
+        self._last_actions = torch.zeros(self.num_envs, 0, device=self.device)
+        # No affordance/SDF buffers in UniGraspTransformer variant
         self._aff_sdf_grid = None
         self._aff_sdf_min = None
         self._aff_sdf_max = None
@@ -85,7 +104,6 @@ class UniGraspTransformerEnv(BaseEnv):
         self._latest_aff_sdf = None
         self._latest_non_sdf = None
 
-        self._initialize_sdf_buffers()
         self._set_object_pose()
 
         fingertip_patterns = ["Link48", "Link4", "Link14", "Link24", "Link34"]
@@ -110,8 +128,12 @@ class UniGraspTransformerEnv(BaseEnv):
         else:
             self._default_table_surface = float(self._default_object_pos[2])
 
-        target_pos = self._default_hand_state.new_tensor([0.0, 0.0, 0.75])
+        # Place hand 0.2m above the table surface, palm-down with local -X pointing toward table.
+        # A +90° rotation about Y maps local -X to world -Z.
+        hand_start_z = float(self._default_table_surface + 0.2)
+        target_pos = self._default_hand_state.new_tensor([0.0, 0.0, hand_start_z])
         self._default_hand_state[:, :3] = target_pos - self._hand_root_offset
+        # 90 degrees about the Y axis (palm-down if -X is palm normal). Quaternion stored as XYZW.
         palm_down_xyzw = torch.tensor(
             (0.0, 0.70710678, 0.0, 0.70710678),
             dtype=self._default_hand_state.dtype,
@@ -146,34 +168,7 @@ class UniGraspTransformerEnv(BaseEnv):
         self.init_obs_buffer()
         self._hold_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
-    def _initialize_sdf_buffers(self) -> None:
-        def _as_tensor(array: Optional[np.ndarray]) -> Optional[torch.Tensor]:
-            if array is None:
-                return None
-            return torch.from_numpy(array).to(device=self.device, dtype=torch.float32)
-
-        aff_data = getattr(self, "_aff_sdf_data_np", None)
-        if aff_data is not None:
-            self._aff_sdf_grid = _as_tensor(aff_data.get("grid"))
-            self._aff_sdf_min = _as_tensor(aff_data.get("min_bounds"))
-            self._aff_sdf_max = _as_tensor(aff_data.get("max_bounds"))
-        else:
-            self._aff_sdf_grid = None
-            self._aff_sdf_min = None
-            self._aff_sdf_max = None
-
-        non_data = getattr(self, "_non_sdf_data_np", None)
-        if non_data is not None:
-            self._non_sdf_grid = _as_tensor(non_data.get("grid"))
-            self._non_sdf_min = _as_tensor(non_data.get("min_bounds"))
-            self._non_sdf_max = _as_tensor(non_data.get("max_bounds"))
-        else:
-            self._non_sdf_grid = None
-            self._non_sdf_min = None
-            self._non_sdf_max = None
-
-        self._latest_aff_sdf = None
-        self._latest_non_sdf = None
+    # (Removed) SDF buffer initialization
 
     def _set_object_pose(self) -> None:
         if self.obj is None:
@@ -196,79 +191,100 @@ class UniGraspTransformerEnv(BaseEnv):
         self.obj.write_root_velocity_to_sim(obj_vel)
 
     def compute_current_observations(self):
+        """Build observations to match the original UniGraspTransformer full-state layout.
+
+        This mirrors the block structure used in the reference StateBasedGrasp:
+        - hand_dofs (66): joint pos (22), joint vel (22), joint forces (22, zero-filled)
+        - hand_fingers (95): per-finger kinematics (5*13) + forces/torques (5*6, zero-filled)
+        - hand_states (6): root pos (3) + Euler xyz (3, zero-filled)
+        - actions (24): last applied action (padded/truncated)
+        - objects (17): obj pos(3), obj rot quat(4), obj lin vel(3), obj ang vel(4), goal_vec(3)
+        - object_visual (128): zeros
+        - times (29): step idx + time encoding (zeros)
+        - hand_objects (36): zeros
+        """
         num_envs = self.num_envs
+        device = self.device
+        dtype = self.robot.data.joint_pos.dtype
 
-        q = self.robot.data.joint_pos
-        dq = self.robot.data.joint_vel
+        def _pad_trunc(x: torch.Tensor, target: int) -> torch.Tensor:
+            if x.shape[1] == target:
+                return x
+            if x.shape[1] > target:
+                return x[:, :target]
+            pad = torch.zeros(x.shape[0], target - x.shape[1], device=x.device, dtype=x.dtype)
+            return torch.cat([x, pad], dim=1)
 
-        root_state = self.robot.data.root_pos_w
-        rel_p = root_state - self.scene.env_origins
+        # Hand DOFs (66)
+        q = self.robot.data.joint_pos  # (N, n_dof)
+        dq = self.robot.data.joint_vel  # (N, n_dof)
+        q22 = _pad_trunc(q, 22)
+        dq22 = _pad_trunc(dq, 22)
+        f22 = torch.zeros(num_envs, 22, device=device, dtype=dtype)
+        hand_dofs = torch.cat([q22, dq22, f22], dim=-1)
 
-        palm_quat_xyzw = self.robot.data.root_quat_w
-        palm_quat = torch.cat((palm_quat_xyzw[:, 3:4], palm_quat_xyzw[:, :3]), dim=-1)
-        default_xyzw = self._default_hand_state[:, 3:7]
-        default_quat = torch.cat((default_xyzw[:, 3:4], default_xyzw[:, :3]), dim=-1)
-        wrist_rel_quat = quat_mul(quat_conjugate(default_quat), palm_quat)
-
-        palm_ang_vel = self.robot.data.root_ang_vel_w
-
-        if self.obj is not None:
-            obj_p = self.obj.data.root_pos_w
-            obj_quat = self.obj.data.root_quat_w
-            obj_quat = torch.cat((obj_quat[:, 3:4], obj_quat[:, :3]), dim=-1)
-            obj_rot_conj = quat_conjugate(obj_quat)
-        else:
-            obj_p = torch.zeros(num_envs, 3, device=self.device, dtype=q.dtype)
-            obj_rot_conj = None
-
-        if self.table is not None:
-            table_height = self.table.data.root_pos_w[:, 2] + self._table_thickness * 0.5
-            rel_p[:, 2] = rel_p[:, 2] - table_height
-        else:
-            rel_p[:, 2] = rel_p[:, 2] - self._default_table_surface
-
-        if self.obj is not None:
-            obj_pos = obj_p
-            rel_p = torch.cat((rel_p, obj_pos - self.scene.env_origins), dim=-1)
-        else:
-            rel_p = torch.cat((rel_p, torch.zeros_like(rel_p)), dim=-1)
-
-        if self.obj is not None:
-            obj_pos = obj_p
-            tip_pos_w = self.hand.data.body_pos_w[:, self._tip_body_ids, :]
-            rel_tip_w = tip_pos_w - obj_pos.unsqueeze(1)
-            tip_pos_o = quat_apply(obj_rot_conj.unsqueeze(1).expand(-1, self._num_tips, -1), rel_tip_w)
-
+        # Hand fingers (95)
+        tip_pos_w = self.hand.data.body_pos_w[:, self._tip_body_ids, :]  # (N,5,3)
+        if hasattr(self.hand.data, "body_quat_w"):
             tip_quat_w = self.hand.data.body_quat_w[:, self._tip_body_ids, :]
-            tip_normals_w = quat_apply(
-                tip_quat_w.reshape(-1, 4),
-                self._local_tip_normals.unsqueeze(0).expand(num_envs, -1, -1).reshape(-1, 3),
-            ).reshape(num_envs, self._num_tips, 3)
-            tip_normals_o = quat_apply(obj_rot_conj.unsqueeze(1).expand(-1, self._num_tips, -1), tip_normals_w)
         else:
-            tip_pos_o = torch.zeros(num_envs, self._num_tips, 3, device=self.device, dtype=q.dtype)
-            tip_normals_o = torch.zeros_like(tip_pos_o)
-
-        if self._aff_sdf_grid is not None and self.obj is not None:
-            aff_sdf_vals = sample_sdf_grid(self._aff_sdf_grid, self._aff_sdf_min, self._aff_sdf_max, tip_pos_o)
+            tip_quat_w = torch.zeros(num_envs, self._num_tips, 4, device=device, dtype=dtype)
+            tip_quat_w[..., 3] = 1.0
+        if hasattr(self.hand.data, "body_lin_vel_w"):
+            tip_lin_vel_w = self.hand.data.body_lin_vel_w[:, self._tip_body_ids, :]
         else:
-            aff_sdf_vals = torch.zeros(num_envs, self._num_tips, device=self.device, dtype=q.dtype)
-        if self._non_sdf_grid is not None and self.obj is not None:
-            non_sdf_vals = sample_sdf_grid(self._non_sdf_grid, self._non_sdf_min, self._non_sdf_max, tip_pos_o)
+            tip_lin_vel_w = torch.zeros_like(tip_pos_w)
+        if hasattr(self.hand.data, "body_ang_vel_w"):
+            tip_ang_vel_w = self.hand.data.body_ang_vel_w[:, self._tip_body_ids, :]
         else:
-            non_sdf_vals = torch.zeros_like(aff_sdf_vals)
+            tip_ang_vel_w = torch.zeros_like(tip_pos_w)
 
-        self._latest_aff_sdf = aff_sdf_vals
-        self._latest_non_sdf = non_sdf_vals
+        finger_kin = torch.cat([tip_pos_w, tip_quat_w, tip_lin_vel_w, tip_ang_vel_w], dim=-1)  # (N,5,13)
+        finger_kin = finger_kin.reshape(num_envs, -1)  # (N,65)
+        finger_ft = torch.zeros(num_envs, 30, device=device, dtype=dtype)
+        hand_fingers = torch.cat([finger_kin, finger_ft], dim=-1)
 
-        fingertip_features = torch.cat(
-            (tip_pos_o.reshape(num_envs, -1), tip_normals_o.reshape(num_envs, -1)),
-            dim=-1,
+        # Hand states (6): root pos + Euler (zeros)
+        hand_pos = self.hand.data.root_pos_w  # (N,3)
+        hand_euler = torch.zeros(num_envs, 3, device=device, dtype=dtype)
+        hand_states = torch.cat([hand_pos, hand_euler], dim=-1)
+
+        # Actions (24): last applied (padded/truncated)
+        last_act = getattr(self, "_last_actions", None)
+        if last_act is None or last_act.numel() == 0:
+            last_act = torch.zeros(num_envs, self.num_actions, device=device, dtype=dtype)
+        act24 = _pad_trunc(last_act, 24)
+
+        # Objects (17): pos, rot, lin vel, ang vel, goal vec
+        if self.obj is not None:
+            obj_pos = self.obj.data.root_pos_w
+            obj_rot = self.obj.data.root_quat_w
+        else:
+            obj_pos = torch.zeros(num_envs, 3, device=device, dtype=dtype)
+            obj_rot = torch.zeros(num_envs, 4, device=device, dtype=dtype)
+            obj_rot[:, 3] = 1.0
+        if hasattr(self.obj.data if self.obj is not None else self.hand.data, "root_lin_vel_w"):
+            obj_lin_vel = (self.obj.data.root_lin_vel_w if self.obj is not None else torch.zeros_like(obj_pos))
+        else:
+            obj_lin_vel = torch.zeros_like(obj_pos)
+        # 4-dim ang vel placeholder
+        obj_ang_vel4 = torch.zeros(num_envs, 4, device=device, dtype=dtype)
+        # Goal vector: from object to a goal height above table
+        goal_z = self._default_table_surface + 0.20
+        goal_pos = torch.tensor(self._default_object_pos, device=device, dtype=dtype).unsqueeze(0).repeat(num_envs, 1)
+        goal_pos[:, 2] = goal_z
+        goal_vec = goal_pos - obj_pos
+        objects = torch.cat([obj_pos, obj_rot, obj_lin_vel, obj_ang_vel4, goal_vec], dim=-1)
+
+        # Object visual (128), Times(29), Hand-objects(36)
+        object_visual = torch.zeros(num_envs, 128, device=device, dtype=dtype)
+        times = torch.zeros(num_envs, 29, device=device, dtype=dtype)
+        times[:, 0] = self.episode_length_buf.to(dtype)
+        hand_objects = torch.zeros(num_envs, 36, device=device, dtype=dtype)
+
+        actor_obs = torch.cat(
+            [hand_dofs, hand_fingers, hand_states, act24, objects, object_visual, times, hand_objects], dim=-1
         )
-        sdf_features = torch.cat((aff_sdf_vals.reshape(num_envs, -1), non_sdf_vals.reshape(num_envs, -1)), dim=-1)
-        wrist_features = torch.cat((wrist_rel_quat, palm_ang_vel), dim=-1)
-
-        actor_obs = torch.cat([q, dq, rel_p, wrist_features, fingertip_features, sdf_features], dim=-1)
         critic_obs = actor_obs
         return actor_obs, critic_obs
 
@@ -286,11 +302,30 @@ class UniGraspTransformerEnv(BaseEnv):
         if self._current_object is not None:
             self.extras.setdefault("info", {})
             self.extras["info"]["grasp/object_id"] = self._current_object.object_id
+        # If object_init metadata is available, apply an initial rotation (and optional pos) for these envs
+        if self._object_init_np is not None and len(env_ids) > 0 and self.obj is not None:
+            try:
+                import numpy as _np
+                ids = env_ids.to(dtype=torch.long, device=self.device)
+                # Prefer test states if available
+                states = self._object_init_np.get("test") or self._object_init_np.get("train")
+                if states is not None and len(states) > 0:
+                    picks = _np.random.randint(0, len(states), size=int(ids.shape[0]))
+                    sel = torch.from_numpy(states[picks]).to(device=self.device, dtype=self.robot.data.root_pos_w.dtype)
+                    obj_pose = self.obj.data.root_state_w.clone()
+                    # Keep object at current z with slight clearance
+                    obj_pose[ids, :3] = self.scene.env_origins[ids] + sel[:, :3]
+                    obj_pose[ids, 3:7] = sel[:, 3:7]
+                    self.obj.write_root_pose_to_sim(obj_pose[ids, :7], env_ids=ids)
+            except Exception:
+                pass
         warp_hand_to_default(self, env_ids)
         return result
 
     def step(self, actions: torch.Tensor):
         delayed_actions = self.action_buffer.compute(actions)
+        # cache last actions for observation
+        self._last_actions = delayed_actions.detach()
 
         joint_actions = delayed_actions[:, : self._joint_action_dim]
         palm_trans_actions = delayed_actions[

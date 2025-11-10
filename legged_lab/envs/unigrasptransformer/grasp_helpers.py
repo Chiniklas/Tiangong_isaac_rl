@@ -9,7 +9,12 @@ from legged_lab.mdp import rewards_unigrasptransformer as reward_terms
 
 
 def warp_hand_to_default(env, env_ids) -> None:
-    """Teleport the Inspire Hand root to the cached default pose."""
+    """Teleport the Inspire Hand root to env-configured default pose.
+
+    Uses ``env._default_hand_state`` which the environment sets during __init__.
+    The position in ``_default_hand_state`` is treated as local to the env origin
+    (consistent with other spawn helpers), so we add the per-env origin here.
+    """
 
     if isinstance(env_ids, torch.Tensor):
         indices = env_ids.to(torch.long)
@@ -23,10 +28,18 @@ def warp_hand_to_default(env, env_ids) -> None:
 
     root_state = env.robot.data.root_state_w.clone()
     origins = env.scene.env_origins.to(device=env.device, dtype=root_state.dtype)
-    base_pos = torch.tensor([0.0, 0.0, 0.75], device=env.device, dtype=root_state.dtype)
-    base_rot = torch.tensor([0.0, 0.70710678, 0.0, 0.70710678], device=env.device, dtype=root_state.dtype)
-    root_state[indices, :3] = origins[indices] + base_pos
-    root_state[indices, 3:7] = base_rot.unsqueeze(0).expand(indices.numel(), -1)
+
+    default_state = getattr(env, "_default_hand_state", None)
+    if default_state is None:
+        # Fallback to existing root state if not provided
+        default_state = root_state
+
+    # Positions are relative to env origin; orientations are absolute (XYZW)
+    base_pos_local = default_state[indices, :3]
+    base_rot_xyzw = default_state[indices, 3:7]
+
+    root_state[indices, :3] = origins[indices] + base_pos_local
+    root_state[indices, 3:7] = base_rot_xyzw
     env.robot.write_root_pose_to_sim(root_state[indices, :7], env_ids=indices)
     zero_vel = torch.zeros((indices.numel(), 6), device=env.device, dtype=root_state.dtype)
     env.robot.write_root_velocity_to_sim(zero_vel, env_ids=indices)
@@ -74,44 +87,7 @@ def apply_palm_motion(env, palm_trans: torch.Tensor, palm_rot: torch.Tensor) -> 
     env.robot.write_root_velocity_to_sim(env._zero_root_vel)
 
 
-def sample_sdf_grid(
-    grid: torch.Tensor,
-    min_bounds: torch.Tensor,
-    max_bounds: torch.Tensor,
-    points: torch.Tensor,
-) -> torch.Tensor:
-    """Sample a dense SDF grid via trilinear interpolation."""
-
-    if grid is None:
-        return torch.zeros(points.shape[:-1], device=points.device, dtype=points.dtype)
-
-    res = torch.tensor(grid.shape, device=points.device, dtype=points.dtype)
-    res_minus_one = res - 1.0
-
-    norm = (points - min_bounds) / (max_bounds - min_bounds)
-    norm = torch.clamp(norm, 0.0, 1.0) * res_minus_one
-
-    idx0 = torch.floor(norm).long()
-    idx1 = torch.minimum(idx0 + 1, res_minus_one.long())
-    frac = norm - idx0.float()
-
-    c000 = grid[idx0[..., 0], idx0[..., 1], idx0[..., 2]]
-    c100 = grid[idx1[..., 0], idx0[..., 1], idx0[..., 2]]
-    c010 = grid[idx0[..., 0], idx1[..., 1], idx0[..., 2]]
-    c110 = grid[idx1[..., 0], idx1[..., 1], idx0[..., 2]]
-    c001 = grid[idx0[..., 0], idx0[..., 1], idx1[..., 2]]
-    c101 = grid[idx1[..., 0], idx0[..., 1], idx1[..., 2]]
-    c011 = grid[idx0[..., 0], idx1[..., 1], idx1[..., 2]]
-    c111 = grid[idx1[..., 0], idx1[..., 1], idx1[..., 2]]
-
-    fx, fy, fz = frac[..., 0], frac[..., 1], frac[..., 2]
-    c00 = c000 * (1 - fx) + c100 * fx
-    c01 = c001 * (1 - fx) + c101 * fx
-    c10 = c010 * (1 - fx) + c110 * fx
-    c11 = c011 * (1 - fx) + c111 * fx
-    c0 = c00 * (1 - fy) + c10 * fy
-    c1 = c01 * (1 - fy) + c11 * fy
-    return c0 * (1 - fz) + c1 * fz
+# SDF utilities are intentionally omitted in the UniGraspTransformer variant.
 
 
 def compute_reward(env) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
@@ -140,6 +116,5 @@ def compute_reward(env) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
 __all__ = [
     "warp_hand_to_default",
     "apply_palm_motion",
-    "sample_sdf_grid",
     "compute_reward",
 ]

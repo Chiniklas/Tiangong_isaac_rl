@@ -199,6 +199,38 @@ def main():
 
     print(f"[INFO] Spawned UniGraspTransformer object: {spawned_name}")
 
+    # Overlay point cloud if metadata provides pc_fps
+    try:
+        import numpy as _np
+        import omni.usd
+        from pxr import Gf, UsdGeom
+
+        pc_path = getattr(spawn_cfg.grasp_object, "pc_fps", None)
+        if pc_path:
+            pts_local = _np.load(pc_path).astype(_np.float32)
+            # Transform to world
+            obj_pos = env.obj.data.root_pos_w[0].detach().cpu().numpy()
+            obj_quat = env.obj.data.root_quat_w[0].detach().cpu().numpy()  # xyzw
+            # Convert quaternion to rotation matrix
+            import math
+
+            x, y, z, w = obj_quat
+            R = _np.array([
+                [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+            ], dtype=_np.float32)
+            pts_world = (pts_local @ R.T) + obj_pos[None, :]
+
+            stage = omni.usd.get_context().get_stage()
+            UsdGeom.Xform.Define(stage, "/World/Debug")
+            pc_prim = UsdGeom.Points.Define(stage, "/World/Debug/ObjectPC")
+            pc_prim.CreateWidthsAttr([0.003])
+            pc_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.1, 0.9, 0.9)])
+            pc_prim.GetPointsAttr().Set([Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_world])
+    except Exception as _e:
+        print(f"[WARN] Point cloud overlay failed: {_e}")
+
     actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
     try:
         while True:
