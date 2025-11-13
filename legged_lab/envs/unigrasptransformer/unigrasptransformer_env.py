@@ -7,7 +7,6 @@ import torch
 from isaaclab.utils.buffers import DelayBuffer
 from isaaclab.utils.math import quat_apply, quat_conjugate, quat_mul
 from legged_lab.envs.base.base_env import BaseEnv
-from legged_lab.assets.inspirehand.object_library import GraspObjectInfo
 
 from .unigrasptransformer_cfg import UniGraspTransformerEnvCfg
 from .grasp_helpers import compute_reward, apply_palm_motion, warp_hand_to_default
@@ -27,13 +26,8 @@ class UniGraspTransformerEnv(BaseEnv):
     ):
         self.render_mode = render_mode
 
-        object_info = getattr(cfg.scene.spawn, "_override_object_info", None)
-        if object_info is None:
-            raise RuntimeError(
-                "No object override provided. Ensure cfg.scene.spawn.config_path points to a YAML specifying 'object_dir'."
-            )
-
-        self._current_object: Optional[GraspObjectInfo] = object_info
+        # Use spawn_cfg directly; no legacy GraspObjectInfo override needed
+        self._current_object = None
         # Optional dataset helpers
         self._pc_fps_path = getattr(cfg.scene.spawn.grasp_object, "pc_fps", None)
         self._pca_axes_path = getattr(cfg.scene.spawn.grasp_object, "pca_axes", None)
@@ -54,21 +48,21 @@ class UniGraspTransformerEnv(BaseEnv):
         except Exception:
             pass
 
-        self._default_object_pos = tuple(cfg.scene.grasp_object.init_state.pos)
-        self._default_object_rot = tuple(cfg.scene.grasp_object.init_state.rot)
+        # Default object pose from scene if object exists; otherwise fall back to zeros
+        if cfg.scene.grasp_object is not None:
+            self._default_object_pos = tuple(cfg.scene.grasp_object.init_state.pos)
+            self._default_object_rot = tuple(cfg.scene.grasp_object.init_state.rot)
+        else:
+            self._default_object_pos = (0.0, 0.0, 0.0)
+            self._default_object_rot = (0.0, 0.0, 0.0, 1.0)
+
         if cfg.scene.table is not None:
             self._table_thickness = cfg.scene.table.spawn.size[2]
             self._default_table_surface = cfg.scene.table.init_state.pos[2] + self._table_thickness * 0.5
         else:
             self._table_thickness = 0.0
             self._default_table_surface = 0.0
-        self._object_clearance = 0.01
-        lowest = object_info.lowest_point
-        if lowest is None:
-            lowest = cfg.scene.spawn.grasp_object.lowest_point
-        if lowest is None:
-            lowest = 0.0
-        self._current_lowest = float(lowest if lowest <= 0.0 else -lowest)
+        # No lowest-point logic needed for UniGraspTransformer dataset
         if cfg.scene.spawn.grasp_object.pos is not None:
             self._default_object_pos = tuple(cfg.scene.spawn.grasp_object.pos)
         if cfg.scene.spawn.grasp_object.rot is not None:
@@ -82,12 +76,18 @@ class UniGraspTransformerEnv(BaseEnv):
 
         super().__init__(cfg, headless)
         log_debug(
-            f"UniGraspTransformerEnv initialized (num_envs={self.num_envs}, object={object_info.object_id})"
+            f"UniGraspTransformerEnv initialized (num_envs={self.num_envs}, object={getattr(cfg.scene.spawn.grasp_object, 'object_id', None)})"
         )
 
         self.hand = self.scene["robot"]
-        self.table = self.scene["table"]
-        self.obj = self.scene["object"]
+        try:
+            self.table = self.scene["table"]
+        except KeyError:
+            self.table = None
+        try:
+            self.obj = self.scene["object"]
+        except KeyError:
+            self.obj = None
 
         self._hand_spawn_cfg = cfg.scene.spawn.hand
         self._default_hand_state = self.robot.data.root_state_w.clone()
@@ -107,6 +107,7 @@ class UniGraspTransformerEnv(BaseEnv):
         self._set_object_pose()
 
         fingertip_patterns = ["Link48", "Link4", "Link14", "Link24", "Link34"]
+        fingertip_names = ["thumb", "index", "middle", "ring", "little"]
         tip_indices, tip_names = self.hand.find_bodies(name_keys=fingertip_patterns, preserve_order=True)
         if len(tip_indices) != len(fingertip_patterns):
             raise RuntimeError(
@@ -114,6 +115,13 @@ class UniGraspTransformerEnv(BaseEnv):
             )
         self._tip_body_ids = tip_indices
         self._num_tips = len(tip_indices)
+        try:
+            mapping_str = ", ".join(
+                f"{i+1}:{fname}({p})" for i, (fname, p) in enumerate(zip(fingertip_names, fingertip_patterns))
+            )
+            log_debug(f"Fingertip mapping -> {mapping_str}")
+        except Exception:
+            pass
         self._local_tip_normals = torch.tensor(
             [[0.0, 0.0, 1.0]] * self._num_tips, dtype=torch.float, device=self.device
         )
@@ -128,19 +136,11 @@ class UniGraspTransformerEnv(BaseEnv):
         else:
             self._default_table_surface = float(self._default_object_pos[2])
 
-        # Place hand 0.2m above the table surface, palm-down with local -X pointing toward table.
-        # A +90° rotation about Y maps local -X to world -Z.
-        hand_start_z = float(self._default_table_surface + 0.2)
-        target_pos = self._default_hand_state.new_tensor([0.0, 0.0, hand_start_z])
-        self._default_hand_state[:, :3] = target_pos - self._hand_root_offset
-        # 90 degrees about the Y axis (palm-down if -X is palm normal). Quaternion stored as XYZW.
-        palm_down_xyzw = torch.tensor(
-            (0.0, 0.70710678, 0.0, 0.70710678),
-            dtype=self._default_hand_state.dtype,
-            device=self.device,
-        ).repeat(self.num_envs, 1)
-        self._default_hand_state[:, 3:7] = palm_down_xyzw
-        warp_hand_to_default(self, slice(None))
+        # Cache initial hand pose from YAML for potential use on reset; robot is spawned with this pose via scene cfg
+        hand_pos_cfg = torch.tensor(self._hand_spawn_cfg.pos, dtype=self.robot.data.root_pos_w.dtype, device=self.device)
+        hand_rot_cfg = torch.tensor(self._hand_spawn_cfg.orientation_xyzw, dtype=self.robot.data.root_pos_w.dtype, device=self.device)
+        self._default_hand_state[:, :3] = hand_pos_cfg - self._hand_root_offset
+        self._default_hand_state[:, 3:7] = hand_rot_cfg
 
         self._joint_action_dim = self.robot.data.default_joint_pos.shape[1]
         self._palm_trans_action_dim = 3
@@ -168,18 +168,19 @@ class UniGraspTransformerEnv(BaseEnv):
         self.init_obs_buffer()
         self._hold_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
+        # Create optional dataset overlays (point cloud / PCA axes) as part of scene spawn
+        self._init_debug_overlays()
+
     # (Removed) SDF buffer initialization
 
     def _set_object_pose(self) -> None:
         if self.obj is None:
             return
 
+        # Place object according to YAML-configured initial pose.
         dtype = self.obj.data.root_pos_w.dtype
         origins = self.scene.env_origins.to(device=self.device, dtype=dtype)
-        base_x, base_y, _ = self._default_object_pos
-        z_pos = self._default_table_surface - self._current_lowest + self._object_clearance
-
-        obj_pos = torch.tensor([base_x, base_y, z_pos], dtype=dtype, device=self.device)
+        obj_pos = torch.tensor(self._default_object_pos, dtype=dtype, device=self.device)
         obj_rot = torch.tensor(self._default_object_rot, dtype=dtype, device=self.device)
 
         obj_pose = torch.zeros(self.num_envs, 13, dtype=dtype, device=self.device)
@@ -189,6 +190,133 @@ class UniGraspTransformerEnv(BaseEnv):
         self.obj.write_root_pose_to_sim(obj_pose[:, :7])
         obj_vel = torch.zeros(self.num_envs, 6, dtype=dtype, device=self.device)
         self.obj.write_root_velocity_to_sim(obj_vel)
+
+    def _init_debug_overlays(self) -> None:
+        """Author per-env overlays under each Object prim based on YAML flags.
+
+        Overlays are created once in object-local space so they follow objects automatically
+        without per-frame updates. Safe no-ops if object or data paths are missing.
+        """
+        try:
+            import numpy as _np  # type: ignore
+            import omni.usd  # type: ignore
+            from pxr import Gf, UsdGeom  # type: ignore
+
+            stage = omni.usd.get_context().get_stage()
+
+            # Hand overlays
+            hand_spawn = self.cfg.scene.spawn.hand
+            if getattr(hand_spawn, "show_palm_dir", False):
+                try:
+                    dir_local = _np.array(hand_spawn.palm_dir_local, dtype=_np.float32)
+                    scale = float(hand_spawn.palm_dir_scale)
+                    a0 = (0.0, 0.0, 0.0)
+                    a1 = (float(scale * dir_local[0]), float(scale * dir_local[1]), float(scale * dir_local[2]))
+                    for i in range(self.num_envs):
+                        debug_root = f"/World/envs/env_{i}/Robot/Debug"
+                        UsdGeom.Xform.Define(stage, debug_root)
+                        curve = UsdGeom.BasisCurves.Define(stage, f"{debug_root}/PalmDir")
+                        curve.CreateTypeAttr("linear")
+                        curve.CreateCurveVertexCountsAttr([2])
+                        curve.CreateWidthsAttr([0.02])
+                        curve.GetDisplayColorAttr().Set([Gf.Vec3f(0.95, 0.6, 0.1)])
+                        curve.GetPointsAttr().Set([Gf.Vec3f(*a0), Gf.Vec3f(*a1)])
+                except Exception:
+                    pass
+
+            if getattr(hand_spawn, "show_fingertips", False):
+                try:
+                    # Create placeholder points; they will be updated each step in world space
+                    size = float(getattr(hand_spawn, "fingertip_marker_size", 0.01))
+                    for i in range(self.num_envs):
+                        debug_root = f"/World/envs/env_{i}/Robot/Debug"
+                        UsdGeom.Xform.Define(stage, debug_root)
+                        tips = UsdGeom.Points.Define(stage, f"{debug_root}/Fingertips")
+                        tips.CreateWidthsAttr([size])
+                        tips.GetDisplayColorAttr().Set([Gf.Vec3f(0.2, 0.95, 0.3)])
+                        # initialize with current fingertip positions if available
+                        if hasattr(self, "_tip_body_ids"):
+                            import numpy as _np
+                            tip_pos_w = self.hand.data.body_pos_w[:, self._tip_body_ids, :]
+                            # convert world points to hand-root local
+                            hand_pos = self.hand.data.root_pos_w[0].detach().cpu().numpy()
+                            q = self.hand.data.root_quat_w[0].detach().cpu().numpy()  # xyzw
+                            ox, oy, oz, ow = q
+                            R = _np.array([
+                                [1 - 2 * (oy * oy + oz * oz), 2 * (ox * oy - oz * ow), 2 * (ox * oz + oy * ow)],
+                                [2 * (ox * oy + oz * ow), 1 - 2 * (ox * ox + oz * oz), 2 * (oy * oz - ox * ow)],
+                                [2 * (ox * oz - oy * ow), 2 * (oy * oz + ox * ow), 1 - 2 * (ox * ox + oy * oy)],
+                            ], dtype=_np.float32)
+                            pts_local = (tip_pos_w[0].detach().cpu().numpy() - hand_pos[None, :]) @ R
+                            # apply optional per-tip offsets from YAML
+                            offsets = getattr(self.cfg.scene.spawn.hand, "fingertip_local_offsets", ())
+                            if offsets and len(offsets) == pts_local.shape[0]:
+                                off = _np.asarray(offsets, dtype=_np.float32)
+                                pts_local = pts_local + off
+                            pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_local]
+                            tips.GetPointsAttr().Set(pts)
+                except Exception:
+                    pass
+
+            # Object overlays
+            spawn = self.cfg.scene.spawn.grasp_object
+            if self.obj is None or not getattr(spawn, "enable", False):
+                return
+
+            # Point cloud overlay
+            if getattr(spawn, "show_point_cloud", False) and getattr(spawn, "pc_fps", None):
+                try:
+                    pc = _np.load(spawn.pc_fps).astype(_np.float32)
+                    # downsample for responsiveness
+                    pc_max = 4096
+                    if pc.shape[0] > pc_max:
+                        sel = _np.random.permutation(pc.shape[0])[:pc_max]
+                        pc = pc[sel]
+                    for i in range(self.num_envs):
+                        debug_root = f"/World/envs/env_{i}/Object/Debug"
+                        UsdGeom.Xform.Define(stage, debug_root)
+                        pc_prim = UsdGeom.Points.Define(stage, f"{debug_root}/ObjectPC")
+                        pc_prim.CreateWidthsAttr([0.01])
+                        pc_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.15, 0.85, 0.95)])
+                        pc_prim.GetPointsAttr().Set([
+                            Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pc
+                        ])
+                        if pc.size > 0:
+                            mins = pc.min(axis=0)
+                            maxs = pc.max(axis=0)
+                            pc_prim.CreateExtentAttr([
+                                Gf.Vec3f(float(mins[0]), float(mins[1]), float(mins[2])),
+                                Gf.Vec3f(float(maxs[0]), float(maxs[1]), float(maxs[2])),
+                            ])
+                except Exception:
+                    pass
+
+            # PCA axes overlay
+            if getattr(spawn, "show_pca_axes", False) and getattr(spawn, "pca_axes", None):
+                try:
+                    axes = _np.load(spawn.pca_axes).astype(_np.float32)  # 3x3
+                    colors = [(1.0, 0.3, 0.3), (0.3, 1.0, 0.3), (0.3, 0.3, 1.0)]
+                    scale = 0.2
+                    for i in range(self.num_envs):
+                        debug_root = f"/World/envs/env_{i}/Object/Debug"
+                        for a in range(3):
+                            curve = UsdGeom.BasisCurves.Define(stage, f"{debug_root}/PCA_Axis_{a}")
+                            curve.CreateTypeAttr("linear")
+                            curve.CreateCurveVertexCountsAttr([2])
+                            curve.CreateWidthsAttr([0.02])
+                            curve.GetDisplayColorAttr().Set([Gf.Vec3f(*colors[a])])
+                            a0 = (0.0, 0.0, 0.0)
+                            a1 = (
+                                float(scale * axes[a, 0]),
+                                float(scale * axes[a, 1]),
+                                float(scale * axes[a, 2]),
+                            )
+                            curve.GetPointsAttr().Set([Gf.Vec3f(*a0), Gf.Vec3f(*a1)])
+                except Exception:
+                    pass
+        except Exception:
+            # overlays are best-effort; ignore on headless or missing deps
+            pass
 
     def compute_current_observations(self):
         """Build observations to match the original UniGraspTransformer full-state layout.
@@ -302,26 +430,34 @@ class UniGraspTransformerEnv(BaseEnv):
         if self._current_object is not None:
             self.extras.setdefault("info", {})
             self.extras["info"]["grasp/object_id"] = self._current_object.object_id
-        # If object_init metadata is available, apply an initial rotation (and optional pos) for these envs
-        # During __init__, BaseEnv may call reset() before self.obj is assigned.
-        # Use getattr to avoid attribute errors in that early call.
-        if self._object_init_np is not None and len(env_ids) > 0 and getattr(self, "obj", None) is not None:
+        # Reset object pose from YAML-configured defaults or dataset init states when present.
+        if len(env_ids) > 0 and getattr(self, "obj", None) is not None:
+            ids = env_ids.to(dtype=torch.long, device=self.device)
             try:
-                import numpy as _np
-                ids = env_ids.to(dtype=torch.long, device=self.device)
-                # Prefer test states if available
-                states = self._object_init_np.get("test") or self._object_init_np.get("train")
-                if states is not None and len(states) > 0:
-                    picks = _np.random.randint(0, len(states), size=int(ids.shape[0]))
-                    sel = torch.from_numpy(states[picks]).to(device=self.device, dtype=self.robot.data.root_pos_w.dtype)
+                if self._object_init_np is not None:
+                    import numpy as _np
+                    states = self._object_init_np.get("test") or self._object_init_np.get("train")
+                    if states is not None and len(states) > 0:
+                        picks = _np.random.randint(0, len(states), size=int(ids.shape[0]))
+                        sel = torch.from_numpy(states[picks]).to(device=self.device, dtype=self.robot.data.root_pos_w.dtype)
+                        obj_pose = self.obj.data.root_state_w.clone()
+                        obj_pose[ids, :3] = self.scene.env_origins[ids] + sel[:, :3]
+                        obj_pose[ids, 3:7] = sel[:, 3:7]
+                        self.obj.write_root_pose_to_sim(obj_pose[ids, :7], env_ids=ids)
+                        zero_vel = torch.zeros((ids.numel(), 6), device=self.device, dtype=obj_pose.dtype)
+                        self.obj.write_root_velocity_to_sim(zero_vel, env_ids=ids)
+                else:
                     obj_pose = self.obj.data.root_state_w.clone()
-                    # Keep object at current z with slight clearance
-                    obj_pose[ids, :3] = self.scene.env_origins[ids] + sel[:, :3]
-                    obj_pose[ids, 3:7] = sel[:, 3:7]
+                    obj_pose[ids, :3] = origins[ids] + torch.tensor(self._default_object_pos, dtype=obj_pose.dtype, device=self.device)
+                    obj_pose[ids, 3:7] = torch.tensor(self._default_object_rot, dtype=obj_pose.dtype, device=self.device)
                     self.obj.write_root_pose_to_sim(obj_pose[ids, :7], env_ids=ids)
+                    zero_vel = torch.zeros((ids.numel(), 6), device=self.device, dtype=obj_pose.dtype)
+                    self.obj.write_root_velocity_to_sim(zero_vel, env_ids=ids)
             except Exception:
                 pass
-        warp_hand_to_default(self, env_ids)
+        # Optionally warp the hand back to YAML-configured default pose
+        if getattr(self.cfg.scene.spawn.hand, "warp_on_reset", True):
+            warp_hand_to_default(self, env_ids)
         return result
 
     def step(self, actions: torch.Tensor):
@@ -368,6 +504,36 @@ class UniGraspTransformerEnv(BaseEnv):
         self.extras["log"].update(reward_logs)
         extras = self.extras
         extras["observations"]["critic"] = actor_obs
+        # Update fingertip overlay positions if enabled
+        try:
+            hand_spawn = self.cfg.scene.spawn.hand
+            if getattr(hand_spawn, "show_fingertips", False):
+                import omni.usd  # type: ignore
+                from pxr import Gf, UsdGeom  # type: ignore
+                import numpy as _np
+                stage = omni.usd.get_context().get_stage()
+                tip_pos_w = self.hand.data.body_pos_w[:, self._tip_body_ids, :]
+                for i in range(self.num_envs):
+                    prim = UsdGeom.Points.Get(stage, f"/World/envs/env_{i}/Robot/Debug/Fingertips")
+                    if prim:
+                        hand_pos = self.hand.data.root_pos_w[i].detach().cpu().numpy()
+                        q = self.hand.data.root_quat_w[i].detach().cpu().numpy()  # xyzw
+                        ox, oy, oz, ow = q
+                        R = _np.array([
+                            [1 - 2 * (oy * oy + oz * oz), 2 * (ox * oy - oz * ow), 2 * (ox * oz + oy * ow)],
+                            [2 * (ox * oy + oz * ow), 1 - 2 * (ox * ox + oz * oz), 2 * (oy * oz - ox * ow)],
+                            [2 * (ox * oz - oy * ow), 2 * (oy * oz + ox * ow), 1 - 2 * (ox * ox + oy * oy)],
+                        ], dtype=_np.float32)
+                        pts_local = (tip_pos_w[i].detach().cpu().numpy() - hand_pos[None, :]) @ R
+                        offsets = getattr(self.cfg.scene.spawn.hand, "fingertip_local_offsets", ())
+                        if offsets and len(offsets) == pts_local.shape[0]:
+                            off = _np.asarray(offsets, dtype=_np.float32)
+                            pts_local = pts_local + off
+                        pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_local]
+                        prim.GetPointsAttr().Set(pts)
+        except Exception:
+            pass
+
         return actor_obs, reward_buf, self.reset_buf, extras
 
     def check_reset(self):

@@ -19,6 +19,7 @@ from legged_lab.envs.base.base_config import (
 )
 from legged_lab.envs.base.base_env_config import BaseAgentCfg
 from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG
+from copy import deepcopy
 from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
 
 from .spawn_cfg import UniGraspTransformerSpawnCfg, load_spawn_from_yaml
@@ -71,11 +72,8 @@ class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
         spawn_cfg = self.spawn
         # Load from YAML only if a config path exists and no runtime override was provided.
         cfg_path = getattr(spawn_cfg, "config_path", None)
-        override_present = (
-            getattr(spawn_cfg, "_override_object_info", None) is not None
-            or getattr(spawn_cfg.grasp_object, "static_usd", None) is not None
-        )
-        if cfg_path and not override_present:
+        override_present = getattr(spawn_cfg.grasp_object, "static_usd", None) is not None
+        if spawn_cfg.grasp_object.enable and cfg_path and not override_present:
             path = Path(cfg_path).expanduser()
             if path.exists():
                 _ = load_spawn_from_yaml(spawn_cfg)
@@ -112,7 +110,7 @@ class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
 
         # Grasp object (USD or simple cuboid)
         static_usd = getattr(spawn_cfg.grasp_object, "static_usd", None)
-        if spawn_cfg.grasp_object.enable and static_usd is not None:
+        if spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh and static_usd is not None:
             usd_spawn = sim_utils.UsdFileCfg(
                 usd_path=static_usd,
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -159,6 +157,17 @@ class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
             "UniGraspTransformerGraspSceneCfg ready (object=%s)"
             % getattr(self.spawn.grasp_object, "object_id", None)
         )
+        # Apply hand initial pose from YAML to robot init_state so we don't need to warp at init
+        try:
+            hand_pos = tuple(self.spawn.hand.pos)
+            hand_rot = tuple(self.spawn.hand.orientation_xyzw)
+            robot_cfg = deepcopy(self.robot)
+            robot_cfg.init_state.pos = hand_pos
+            robot_cfg.init_state.rot = hand_rot
+            self.robot = robot_cfg
+            log_debug("Applied YAML hand init pose to robot init_state")
+        except Exception:
+            pass
 
 
 @configclass

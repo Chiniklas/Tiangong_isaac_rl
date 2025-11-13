@@ -7,11 +7,12 @@ YAML loader for object overrides, without inheriting from the GraspXL variant.
 from __future__ import annotations
 
 import json
+import os
+import random
 from pathlib import Path
 from typing import Any, Optional
 from isaaclab.utils import configclass
 
-from legged_lab.assets.inspirehand.object_library import GraspObjectInfo
 from .logging_utils import log_debug
 
 
@@ -22,7 +23,8 @@ class UniGraspTransformerTableSpawnCfg:
     enable: bool = True
     size: tuple[float, float, float] = (0.6, 0.6, 0.03)
     pos: tuple[float, float, float] = (0.00, 0.0, 0.70)
-    rot: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    # Identity quaternion (x, y, z, w) so table is axis-aligned
+    rot: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     color: tuple[float, float, float] = (0.6, 0.6, 0.6)
     metallic: float = 0.0
     roughness: float = 0.6
@@ -39,7 +41,8 @@ class UniGraspTransformerObjectSpawnCfg:
     enable: bool = True
     size: tuple[float, float, float] = (0.05, 0.05, 0.10)
     pos: tuple[float, float, float] = (0.00, 0.0, 0.73)
-    rot: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    # Identity quaternion (x, y, z, w) so object is upright by default
+    rot: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     mass: float = 0.5
     disable_gravity: bool = False
     color: tuple[float, float, float] = (0.8, 0.3, 0.3)
@@ -48,7 +51,10 @@ class UniGraspTransformerObjectSpawnCfg:
     asset_prim_name: str = "Object"
     object_id: Optional[str] = None
     static_usd: Optional[str] = None
-    lowest_point: Optional[float] = None
+    # Spawn and overlay flags
+    spawn_mesh: bool = True
+    show_point_cloud: bool = True
+    show_pca_axes: bool = True
     # Optional dataset helpers
     pc_fps: Optional[str] = None
     pca_axes: Optional[str] = None
@@ -72,6 +78,15 @@ class UniGraspTransformerHandSpawnCfg:
         0.70710678,
     )
     disable_gravity: bool = True
+    # Debug overlays for hand
+    show_palm_dir: bool = True
+    palm_dir_local: tuple[float, float, float] = (-1.0, 0.0, 0.0)
+    palm_dir_scale: float = 0.2
+    show_fingertips: bool = True
+    fingertip_marker_size: float = 0.01
+    fingertip_local_offsets: list[tuple[float, float, float]] = ()  # per-tip local offsets (hand-root frame)
+    # Behavior
+    warp_on_reset: bool = True
 
     def __post_init__(self):
         log_debug("HandSpawnCfg ready (fixed base pose)")
@@ -86,10 +101,21 @@ class UniGraspTransformerSpawnCfg:
     hand: UniGraspTransformerHandSpawnCfg = UniGraspTransformerHandSpawnCfg()
     config_path: Optional[str] = str((Path(__file__).with_name("object_cfg.yaml").resolve()))
     use_object_library: bool = True
-    _override_object_info: Optional[GraspObjectInfo] = None
 
     def __post_init__(self):
         log_debug(f"SpawnCfg ready (config_path={self.config_path})")
+        # Load unified YAML config (config.yaml next to this file) to override defaults
+        try:
+            load_unigrasp_config(self, Path(__file__).with_name("config.yaml"))
+        except Exception:
+            # Keep defaults if config not found or malformed
+            pass
+        # If mesh object requested but no USD provided, try picking a random object
+        try:
+            _maybe_pick_random_dataset_object(self)
+        except Exception:
+            # Keep as-is; test script will validate and raise if inconsistent
+            pass
 
 
 def _expand_path(path: str | Path | None) -> Optional[Path]:
@@ -98,7 +124,7 @@ def _expand_path(path: str | Path | None) -> Optional[Path]:
     return Path(path).expanduser().resolve()
 
 
-def load_spawn_from_yaml(spawn_cfg: UniGraspTransformerSpawnCfg) -> Optional[GraspObjectInfo]:
+def load_spawn_from_yaml(spawn_cfg: UniGraspTransformerSpawnCfg) -> None:
     """Load spawn overrides from a YAML file and attach them to ``spawn_cfg``.
 
     The YAML must contain ``object_dir`` pointing to a directory that contains a
@@ -149,20 +175,9 @@ def load_spawn_from_yaml(spawn_cfg: UniGraspTransformerSpawnCfg) -> Optional[Gra
             "Ensure the conversion tool generated metadata.json with 'static_usd' or '<name>_static.usd'."
         )
 
-    lowest_point = None
-    lowest_path = object_dir / "lowest_point_new.txt"
-    if lowest_path.exists():
-        try:
-            text = lowest_path.read_text().strip()
-            if text:
-                lowest_point = float(text.split()[0])
-        except (OSError, ValueError):  # pragma: no cover
-            lowest_point = None
-
     # Update spawn configuration values
     spawn_cfg.use_object_library = False
     spawn_cfg.grasp_object.static_usd = static_path.as_posix()
-    spawn_cfg.grasp_object.lowest_point = lowest_point
     # Optional dataset helpers
     pc_fps = _metadata_path("pc_fps")
     pca_axes = _metadata_path("pca_axes")
@@ -171,24 +186,10 @@ def load_spawn_from_yaml(spawn_cfg: UniGraspTransformerSpawnCfg) -> Optional[Gra
     spawn_cfg.grasp_object.pca_axes = pca_axes.as_posix() if pca_axes else None
     spawn_cfg.grasp_object.object_init = object_init.as_posix() if object_init else None
 
-    override = GraspObjectInfo(
-        object_id=object_dir.name,
-        category=object_dir.name.split("_", 1)[0],
-        root_dir=object_dir,
-        urdf=None,
-        fixed_base_urdf=None,
-        affordance_mesh=None,
-        non_affordance_mesh=None,
-        lowest_point=lowest_point,
-        static_usd=static_path,
-        affordance_usd=None,
-        non_affordance_usd=None,
-    )
-    # No SDF attachments in UniGraspTransformer variant
-
-    spawn_cfg._override_object_info = override
-    log_debug(f"UniGraspTransformer spawn override loaded: {override.object_id}")
-    return override
+    # Store object id on the spawn config for downstream logging
+    spawn_cfg.grasp_object.object_id = object_dir.name
+    log_debug(f"UniGraspTransformer spawn override loaded: {spawn_cfg.grasp_object.object_id}")
+    return None
 
 
 __all__ = [
@@ -198,3 +199,132 @@ __all__ = [
     "UniGraspTransformerSpawnCfg",
     "load_spawn_from_yaml",
 ]
+
+
+def load_unigrasp_config(spawn_cfg: UniGraspTransformerSpawnCfg, yaml_path: Path) -> None:
+    """Load unified config.yaml and populate spawn_cfg (table/object/hand)."""
+    import yaml
+
+    if not yaml_path.exists():
+        raise FileNotFoundError(f"Unified config not found: {yaml_path}")
+
+    data = yaml.safe_load(yaml_path.read_text()) or {}
+    ucfg = data.get("unigrasptransformer") or data
+
+    def _as_tuple(seq, n):
+        if seq is None:
+            return None
+        vals = tuple(float(x) for x in seq)
+        if len(vals) != n:
+            raise ValueError(f"Expected {n} elements, got {len(vals)}: {seq}")
+        return vals
+
+    # Table
+    t = ucfg.get("table", {})
+    spawn_cfg.table.enable = bool(t.get("enable", spawn_cfg.table.enable))
+    spawn_cfg.table.size = _as_tuple(t.get("size", spawn_cfg.table.size), 3) or spawn_cfg.table.size
+    spawn_cfg.table.pos = _as_tuple(t.get("pos", spawn_cfg.table.pos), 3) or spawn_cfg.table.pos
+    spawn_cfg.table.rot = _as_tuple(t.get("rot_xyzw", spawn_cfg.table.rot), 4) or spawn_cfg.table.rot
+
+    # Object
+    o = ucfg.get("object", {})
+    spawn_cfg.grasp_object.enable = bool(o.get("enable", spawn_cfg.grasp_object.enable))
+    spawn_cfg.grasp_object.spawn_mesh = bool(o.get("spawn_mesh", spawn_cfg.grasp_object.spawn_mesh))
+    spawn_cfg.grasp_object.show_point_cloud = bool(o.get("show_point_cloud", spawn_cfg.grasp_object.show_point_cloud))
+    spawn_cfg.grasp_object.show_pca_axes = bool(o.get("show_pca_axes", spawn_cfg.grasp_object.show_pca_axes))
+    spawn_cfg.grasp_object.size = _as_tuple(o.get("size", spawn_cfg.grasp_object.size), 3) or spawn_cfg.grasp_object.size
+    spawn_cfg.grasp_object.pos = _as_tuple(o.get("pos", spawn_cfg.grasp_object.pos), 3) or spawn_cfg.grasp_object.pos
+    spawn_cfg.grasp_object.rot = _as_tuple(o.get("rot_xyzw", spawn_cfg.grasp_object.rot), 4) or spawn_cfg.grasp_object.rot
+    static_usd = o.get("static_usd", None)
+    spawn_cfg.grasp_object.static_usd = static_usd if static_usd else spawn_cfg.grasp_object.static_usd
+    spawn_cfg.grasp_object.pc_fps = o.get("pc_fps", spawn_cfg.grasp_object.pc_fps)
+    spawn_cfg.grasp_object.pca_axes = o.get("pca_axes", spawn_cfg.grasp_object.pca_axes)
+    spawn_cfg.grasp_object.object_init = o.get("object_init", spawn_cfg.grasp_object.object_init)
+
+    # Enforce coherence: when object is disabled, all dependent flags and assets are cleared
+    if not spawn_cfg.grasp_object.enable:
+        spawn_cfg.grasp_object.spawn_mesh = False
+        spawn_cfg.grasp_object.show_point_cloud = False
+        spawn_cfg.grasp_object.show_pca_axes = False
+        spawn_cfg.grasp_object.static_usd = None
+        spawn_cfg.grasp_object.pc_fps = None
+        spawn_cfg.grasp_object.pca_axes = None
+        spawn_cfg.grasp_object.object_init = None
+        spawn_cfg.grasp_object.object_id = None
+
+    # Hand
+    h = ucfg.get("hand", {})
+    spawn_cfg.hand.pos = _as_tuple(h.get("pos", spawn_cfg.hand.pos), 3) or spawn_cfg.hand.pos
+    spawn_cfg.hand.orientation_xyzw = _as_tuple(h.get("rot_xyzw", spawn_cfg.hand.orientation_xyzw), 4) or spawn_cfg.hand.orientation_xyzw
+    # Optional hand overlays
+    spawn_cfg.hand.show_palm_dir = bool(h.get("show_palm_dir", spawn_cfg.hand.show_palm_dir))
+    palm_dir = h.get("palm_dir_local", list(spawn_cfg.hand.palm_dir_local))
+    if palm_dir is not None:
+        spawn_cfg.hand.palm_dir_local = _as_tuple(palm_dir, 3) or spawn_cfg.hand.palm_dir_local
+    spawn_cfg.hand.palm_dir_scale = float(h.get("palm_dir_scale", spawn_cfg.hand.palm_dir_scale))
+    spawn_cfg.hand.show_fingertips = bool(h.get("show_fingertips", spawn_cfg.hand.show_fingertips))
+    spawn_cfg.hand.fingertip_marker_size = float(h.get("fingertip_marker_size", spawn_cfg.hand.fingertip_marker_size))
+    spawn_cfg.hand.warp_on_reset = bool(h.get("warp_on_reset", spawn_cfg.hand.warp_on_reset))
+    fto = h.get("fingertip_local_offsets", None)
+    if fto is not None:
+        try:
+            parsed = []
+            for item in fto:
+                if item is None:
+                    parsed.append((0.0, 0.0, 0.0))
+                else:
+                    parsed.append(_as_tuple(item, 3))
+            spawn_cfg.hand.fingertip_local_offsets = [tuple(map(float, t)) for t in parsed]
+        except Exception:
+            pass
+
+    log_debug("Unified config loaded from %s" % yaml_path)
+
+
+def _maybe_pick_random_dataset_object(spawn_cfg: UniGraspTransformerSpawnCfg) -> None:
+    """If mesh spawning is enabled without a USD, pick a random object from a dataset subset.
+
+    The subset root is taken from environment variable UGTF_SUBSET_ROOT, or falls back to
+    the project's default path used during development.
+    """
+    if not (spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh):
+        return
+    if getattr(spawn_cfg.grasp_object, "static_usd", None):
+        return
+
+    subset_root_env = os.environ.get(
+        "UGTF_SUBSET_ROOT",
+        "/home/chizhang/projects/Tiangong_isaac_rl/dataset/unigrasptransformer_asset/meshdatav3_scaled/subset_core10",
+    )
+    subset_root = Path(subset_root_env).expanduser().resolve()
+    if not subset_root.exists():
+        return
+
+    candidates: list[tuple[Path, Path]] = []
+    for cat in sorted(p for p in subset_root.iterdir() if p.is_dir()):
+        for obj in sorted(p for p in cat.iterdir() if p.is_dir()):
+            meta = obj / "metadata.json"
+            if meta.exists():
+                candidates.append((obj, meta))
+    if not candidates:
+        return
+
+    obj_dir, meta_path = random.choice(candidates)
+    try:
+        data = json.loads(meta_path.read_text())
+    except Exception:
+        return
+    usd = data.get("static_usd")
+    if not usd:
+        return
+    usd_path = Path(usd).expanduser().resolve()
+    if not usd_path.exists():
+        return
+
+    # Set resolved object on spawn cfg
+    spawn_cfg.grasp_object.static_usd = usd_path.as_posix()
+    spawn_cfg.grasp_object.pc_fps = data.get("pc_fps")
+    spawn_cfg.grasp_object.pca_axes = data.get("pca_axes")
+    spawn_cfg.grasp_object.object_init = data.get("object_init")
+    spawn_cfg.grasp_object.object_id = obj_dir.name
+    log_debug(f"Picked random dataset object: {obj_dir.name}")

@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Preview a configured UniGraspTransformer scene with the Inspire Hand."""
+"""Spawn a UniGraspTransformer scene and print a concise status summary.
+
+All hyper-parameters come from legged_lab/envs/unigrasptransformer/config.yaml
+via the SpawnCfg. If configuration is inconsistent (e.g., mesh requested but
+no USD path), raises an error. No overlays or dataset picking here.
+"""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-import os
 
 
 def _ensure_isaaclab_on_path():
@@ -46,71 +50,9 @@ _ensure_isaaclab_on_path()
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--headless",
-        action="store_true",
-        help="Run without rendering.",
-    )
-    parser.add_argument(
-        "--steps",
-        type=int,
-        default=240,
-        help="Simulation steps to run.",
-    )
-    parser.add_argument(
-        "--num-envs",
-        type=int,
-        default=4,
-        help="Number of parallel environments to spawn.",
-    )
-    parser.add_argument(
-        "--config-yaml",
-        type=Path,
-        default=None,
-        help="Optional YAML file describing a fixed object spawn configuration.",
-    )
-    parser.add_argument(
-        "--ugtf-root",
-        type=Path,
-        default=Path("/home/chizhang/projects/Tiangong_isaac_rl/dataset/unigrasptransformer_asset/meshdatav3_scaled"),
-        help=(
-            "Root of UniDexGrasp++ meshes (meshdatav3_scaled)."
-        ),
-    )
-    parser.add_argument(
-        "--ugtf-object",
-        type=str,
-        default=None,
-        help=(
-            "Optional object relative path under --ugtf-root, e.g. 'core/bottle-xxxx'."
-            " If omitted, a random object is chosen."
-        ),
-    )
-    parser.add_argument(
-        "--subset-name",
-        type=str,
-        default="subset_core10",
-        help="Subset directory name created by the conversion tool (under --ugtf-root)",
-    )
-    parser.add_argument(
-        "--category",
-        type=str,
-        default="core",
-        help="Category inside the subset to sample from (e.g., core/sem/ddg/mujoco)",
-    )
-    parser.add_argument(
-        "--show-pc",
-        action="store_true",
-        default=True,
-        help="Show point-cloud overlay from metadata.pc_fps (default: on)",
-    )
-    parser.add_argument(
-        "--pc-max",
-        type=int,
-        default=4096,
-        help="Max points to display from pc_fps to keep UI responsive.",
-    )
-    # No separate USD root needed when USDs are written into subset object folders
+    parser.add_argument("--headless", action="store_true", help="Run without rendering.")
+    parser.add_argument("--num-envs", type=int, default=4, help="Number of parallel environments.")
+    parser.add_argument("--steps", type=int, default=120, help="Simulation steps to run for viewing.")
     return parser.parse_args()
 
 
@@ -121,13 +63,11 @@ def main():
         from isaaclab.app import AppLauncher
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise ModuleNotFoundError(
-            "Could not import isaaclab.app.AppLauncher. Run this script inside the Isaac Lab kit shell (./isaaclab.sh --run)."
+            "Could not import isaaclab.app.AppLauncher. Run inside the Isaac Lab kit shell (./isaaclab.sh --run)."
         ) from exc
 
     app = AppLauncher(headless=args.headless)
     simulation_app = app.app
-
-    import torch
 
     from legged_lab.envs.unigrasptransformer.unigrasptransformer_env import UniGraspTransformerEnv
     from legged_lab.envs.unigrasptransformer.unigrasptransformer_cfg import (
@@ -135,135 +75,104 @@ def main():
         UniGraspTransformerGraspSceneCfg,
     )
     from legged_lab.envs.unigrasptransformer.spawn_cfg import UniGraspTransformerSpawnCfg
-    from legged_lab.assets.inspirehand.object_library import GraspObjectInfo
 
-    spawn_cfg = UniGraspTransformerSpawnCfg(
-        config_path=(args.config_yaml.expanduser().resolve().as_posix() if args.config_yaml else None)
-    )
+    # Load config (spawn cfg auto-loads config.yaml in __post_init__)
+    spawn_cfg = UniGraspTransformerSpawnCfg()
 
-    # If a UniGraspTransformer subset is present, randomly pick an object and load its pre-converted USD via metadata.json
-    assets_root = args.ugtf_root.expanduser().resolve()
-    subset_dir = assets_root / args.subset_name / args.category
+    # Validate object config if mesh is requested and random pick failed upstream
+    if spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh and not spawn_cfg.grasp_object.static_usd:
+        raise RuntimeError("Config error: object.spawn_mesh=true but object.static_usd is not set in config.yaml (and no dataset object was auto-picked)")
 
-
-    if subset_dir.exists() and subset_dir.is_dir():
-        import json as _json
-        import random as _random
-
-        if args.ugtf_object is not None:
-            chosen_dir = (subset_dir / args.ugtf_object).resolve()
-            if not chosen_dir.exists():
-                raise FileNotFoundError(f"UGTF subset object dir not found: {chosen_dir}")
-        else:
-            obj_dirs = [p for p in subset_dir.iterdir() if p.is_dir()]
-            if not obj_dirs:
-                raise RuntimeError(f"No objects under subset: {subset_dir}")
-            chosen_dir = _random.choice(obj_dirs)
-
-        # Prefer metadata next to the subset object folder (new converter writes here)
-        meta_path = chosen_dir / "metadata.json"
-        if not meta_path.exists():
-            raise FileNotFoundError(
-                f"Missing metadata.json next to subset object: {meta_path}.\n"
-                f"Re-run the converter without --usd-output so USDs are written into subset folders."
-            )
-        metadata = _json.loads(meta_path.read_text())
-        static_usd = metadata.get("static_usd")
-        if not static_usd:
-            raise RuntimeError(f"metadata.json for {chosen_dir.name} lacks 'static_usd'")
-        static_usd_path = Path(static_usd).expanduser().resolve()
-        if not static_usd_path.exists():
-            raise FileNotFoundError(f"static_usd path does not exist: {static_usd_path}")
-
-        # Override spawn to use the pre-converted USD (no SDFs)
-        spawn_cfg.use_object_library = False
-        spawn_cfg.grasp_object.static_usd = static_usd_path.as_posix()
-        spawn_cfg.grasp_object.affordance_sdf = None
-        spawn_cfg.grasp_object.non_affordance_sdf = None
-        spawn_cfg.grasp_object.affordance_sdf_data = None
-        spawn_cfg.grasp_object.non_affordance_sdf_data = None
-        # Attach optional dataset helpers for visualization/reset behavior
-        spawn_cfg.grasp_object.pc_fps = metadata.get("pc_fps")
-        spawn_cfg.grasp_object.pca_axes = metadata.get("pca_axes")
-        spawn_cfg.grasp_object.object_init = metadata.get("object_init")
-
-        override = GraspObjectInfo(
-            object_id=chosen_dir.name,
-            category=chosen_dir.parent.name,
-            root_dir=chosen_dir,
-            urdf=None,
-            fixed_base_urdf=None,
-            affordance_mesh=None,
-            non_affordance_mesh=None,
-            lowest_point=None,
-            static_usd=static_usd_path,
-            affordance_usd=None,
-            non_affordance_usd=None,
-            affordance_sdf=None,
-            non_affordance_sdf=None,
-        )
-        spawn_cfg._override_object_info = override
-
+    # Build scene and spawn env
     scene_cfg = UniGraspTransformerGraspSceneCfg(spawn=spawn_cfg, num_envs=args.num_envs)
     env_cfg = UniGraspTransformerEnvCfg(scene=scene_cfg)
-
     env = UniGraspTransformerEnv(env_cfg, headless=args.headless)
 
-    spawned_name = getattr(env._current_object, "object_id", None)
-    if spawned_name is None:
-        spawned_name = spawn_cfg.grasp_object.object_id or "unknown"
+    # Print concise status
+    tbl = scene_cfg.table is not None
+    obj_cfg = spawn_cfg.grasp_object
+    obj_spawned = scene_cfg.grasp_object is not None
+    if not obj_cfg.enable:
+        obj_status = "disabled"
+    elif obj_cfg.spawn_mesh:
+        obj_status = f"USD: {obj_cfg.static_usd or '<missing>'}"
+    else:
+        obj_status = f"cuboid size={obj_cfg.size}"
 
-    print(f"[INFO] Spawned UniGraspTransformer object: {spawned_name}")
+    print("[INFO] Scene Summary:")
+    print(f"  - table: {'enabled' if tbl else 'disabled'}")
+    print(f"  - object: {obj_status} (spawned={'yes' if obj_spawned else 'no'})")
+    print(f"  - hand: pos={spawn_cfg.hand.pos}, rot_xyzw={spawn_cfg.hand.orientation_xyzw}")
+    # Echo object overlay/mesh flags from YAML so users can verify they were loaded
+    print("[INFO] Object Flags (from YAML):")
+    print(f"  - enable={obj_cfg.enable}, spawn_mesh={obj_cfg.spawn_mesh}")
+    print(f"  - show_point_cloud={getattr(obj_cfg, 'show_point_cloud', None)}")
+    print(f"  - show_pca_axes={getattr(obj_cfg, 'show_pca_axes', None)}")
+    if getattr(obj_cfg, 'object_id', None):
+        print(f"  - object_id={obj_cfg.object_id}")
 
-    # Prepare point cloud overlay (loaded once, updated each frame)
-    pc_local = None
-    pc_prim = None
-    if args.show_pc:
-        try:
+    # Post-validate object state
+    if obj_cfg.enable and obj_cfg.spawn_mesh and not obj_cfg.static_usd:
+        raise RuntimeError("Scene built with object.spawn_mesh=true but no object.static_usd configured")
+
+    # Create simple overlays if enabled in YAML and data is available
+    try:
+        if obj_cfg.enable:
             import numpy as _np
             import omni.usd
             from pxr import Gf, UsdGeom
 
-            pc_path = getattr(spawn_cfg.grasp_object, "pc_fps", None)
-            if pc_path:
-                pc_data = _np.load(pc_path).astype(_np.float32)
-                # Downsample if huge
-                if pc_data.shape[0] > args.pc_max:
-                    sel = _np.random.permutation(pc_data.shape[0])[: args.pc_max]
-                    pc_data = pc_data[sel]
-                pc_local = pc_data
-                stage = omni.usd.get_context().get_stage()
-                UsdGeom.Xform.Define(stage, "/World/Debug")
-                pc_prim = UsdGeom.Points.Define(stage, "/World/Debug/ObjectPC")
-                pc_prim.CreateWidthsAttr([0.004])
-                pc_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.15, 0.85, 0.95)])
-        except Exception as _e:
-            print(f"[WARN] Point cloud init failed: {_e}")
-
-    actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
-    try:
-        while True:
-            env.step(actions)
-
-            # Update PC overlay every frame
-            if pc_local is not None and pc_prim is not None:
+            stage = omni.usd.get_context().get_stage()
+            # Point cloud
+            if getattr(obj_cfg, "show_point_cloud", False) and getattr(obj_cfg, "pc_fps", None):
                 try:
-                    from pxr import Gf
-                    import numpy as _np
-                    # Transform local PC by current object pose
-                    obj_pos = env.obj.data.root_pos_w[0].detach().cpu().numpy()
-                    ox, oy, oz, ow = env.obj.data.root_quat_w[0].detach().cpu().numpy()  # xyzw
-                    R = _np.array([
-                        [1 - 2 * (oy * oy + oz * oz), 2 * (ox * oy - oz * ow), 2 * (ox * oz + oy * ow)],
-                        [2 * (ox * oy + oz * ow), 1 - 2 * (ox * ox + oz * oz), 2 * (oy * oz - ox * ow)],
-                        [2 * (ox * oz - oy * ow), 2 * (oy * oz + ox * ow), 1 - 2 * (ox * ox + oy * oy)],
-                    ], dtype=_np.float32)
-                    pts_world = (pc_local @ R.T) + obj_pos[None, :]
-                    pc_prim.GetPointsAttr().Set([Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_world])
-                except Exception:
-                    pass
+                    pc = _np.load(obj_cfg.pc_fps).astype(_np.float32)
+                    for i in range(env.num_envs):
+                        debug_root = f"/World/envs/env_{i}/Object/Debug"
+                        UsdGeom.Xform.Define(stage, debug_root)
+                        pc_prim = UsdGeom.Points.Define(stage, f"{debug_root}/ObjectPC")
+                        pc_prim.CreateWidthsAttr([0.01])
+                        pc_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.15, 0.85, 0.95)])
+                        pc_prim.GetPointsAttr().Set([
+                            Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pc
+                        ])
+                except Exception as _e:
+                    print(f"[WARN] Failed to create point cloud overlay: {_e}")
+
+            # PCA axes
+            if getattr(obj_cfg, "show_pca_axes", False) and getattr(obj_cfg, "pca_axes", None):
+                try:
+                    axes = _np.load(obj_cfg.pca_axes).astype(_np.float32)
+                    colors = [(1.0, 0.3, 0.3), (0.3, 1.0, 0.3), (0.3, 0.3, 1.0)]
+                    scale = 0.2
+                    for i in range(env.num_envs):
+                        debug_root = f"/World/envs/env_{i}/Object/Debug"
+                        for a in range(3):
+                            curve = UsdGeom.BasisCurves.Define(stage, f"{debug_root}/PCA_Axis_{a}")
+                            curve.CreateTypeAttr("linear")
+                            curve.CreateCurveVertexCountsAttr([2])
+                            curve.CreateWidthsAttr([0.02])
+                            curve.GetDisplayColorAttr().Set([Gf.Vec3f(*colors[a])])
+                            a0 = (0.0, 0.0, 0.0)
+                            a1 = (
+                                float(scale * axes[a, 0]),
+                                float(scale * axes[a, 1]),
+                                float(scale * axes[a, 2]),
+                            )
+                            curve.GetPointsAttr().Set([Gf.Vec3f(*a0), Gf.Vec3f(*a1)])
+                except Exception as _e:
+                    print(f"[WARN] Failed to create PCA axes overlay: {_e}")
+    except Exception as _e:
+        print(f"[WARN] Overlay init skipped: {_e}")
+
+    # Step a few frames to display scene/overlays
+    try:
+        import torch
+        actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
+        for _ in range(max(1, args.steps)):
+            env.step(actions)
     except KeyboardInterrupt:
-        print("\n[INFO] Interrupted by user. Shutting down...")
+        pass
 
     env.close()
     simulation_app.close()
