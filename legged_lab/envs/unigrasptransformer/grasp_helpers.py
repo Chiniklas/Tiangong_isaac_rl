@@ -86,10 +86,6 @@ def apply_palm_motion(env, palm_trans: torch.Tensor, palm_rot: torch.Tensor) -> 
     env.robot.write_root_pose_to_sim(root_state[:, :7])
     env.robot.write_root_velocity_to_sim(env._zero_root_vel)
 
-
-# SDF utilities are intentionally omitted in the UniGraspTransformer variant.
-
-
 def compute_reward(env) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     if env.obj is None:
         zero = torch.zeros(env.num_envs, device=env.device, dtype=env.robot.data.root_pos_w.dtype)

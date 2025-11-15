@@ -19,6 +19,7 @@ from legged_lab.envs.base.base_config import (
 )
 from legged_lab.envs.base.base_env_config import BaseAgentCfg
 from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG
+from legged_lab.assets.hand_assets.shadowhand import SHADOW_HAND_CFG
 from copy import deepcopy
 from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
 
@@ -48,21 +49,24 @@ class UniGraspTransformerEventCfg(EventCfg):
     push_robot = None
 
 
+HAND_ASSET_REGISTRY = {
+    "inspire": INSPIRE_HAND_CFG,
+    "shadowhand": SHADOW_HAND_CFG,
+}
+FINGERTIP_PATTERNS = {
+    "inspire": ["Link48", "Link4", "Link14", "Link24", "Link34"],
+    "shadowhand": ["fftip", "mftip", "rftip", "lftip", "thtip"],
+}
+
+
+@configclass
 @configclass
 class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
-    scene_cfg_cls: type = GraspSceneCfg
     seed: int = 42
-    max_episode_length_s: float = 20.0
-    num_envs: int = 4
-    env_spacing: float = 2.0
-    terrain_type: str = "plane"
-    terrain_generator = None
-    robot = INSPIRE_HAND_CFG
-
     spawn: UniGraspTransformerSpawnCfg = UniGraspTransformerSpawnCfg()
     table: RigidObjectCfg | None = None
     grasp_object: RigidObjectCfg | None = None
-
+    terrain_type: str = "plane"
     def __post_init__(self):
         try:
             super().__post_init__()  # type: ignore[misc]
@@ -70,6 +74,21 @@ class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
             pass
 
         spawn_cfg = self.spawn
+        hand_variant = getattr(spawn_cfg.hand, "asset_type", "inspire").lower()
+        robot_cfg = deepcopy(HAND_ASSET_REGISTRY.get(hand_variant, INSPIRE_HAND_CFG))
+        custom_asset_path = getattr(spawn_cfg.hand, "asset_path", None)
+        if custom_asset_path:
+            asset_path = Path(custom_asset_path).expanduser().resolve()
+            if not asset_path.exists():
+                raise FileNotFoundError(f"Hand asset path does not exist: {asset_path}")
+            if hasattr(robot_cfg.spawn, "asset_path"):
+                robot_cfg.spawn.asset_path = asset_path.as_posix()
+            elif hasattr(robot_cfg.spawn, "usd_path"):
+                robot_cfg.spawn.usd_path = asset_path.as_posix()
+        self.robot = robot_cfg
+        log_debug(f"Selected hand asset '{hand_variant}'")
+        if not getattr(spawn_cfg.hand, "fingertip_body_exprs", None):
+            spawn_cfg.hand.fingertip_body_exprs = tuple(FINGERTIP_PATTERNS.get(hand_variant, FINGERTIP_PATTERNS["inspire"]))
         # Load from YAML only if a config path exists and no runtime override was provided.
         cfg_path = getattr(spawn_cfg, "config_path", None)
         override_present = getattr(spawn_cfg.grasp_object, "static_usd", None) is not None

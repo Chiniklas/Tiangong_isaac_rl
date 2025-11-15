@@ -21,8 +21,8 @@ unigrasptransformer:
     show_pca_axes: true
     static_usd: null
     size:
-    - 0.05
-    - 0.05
+    - 0.1
+    - 0.1
     - 0.1
     pos:
     - 0.0
@@ -37,6 +37,8 @@ unigrasptransformer:
     pca_axes: null
     object_init: null
   hand:
+    asset_type: shadowhand
+    asset_path: null
     pos:
     - 0.0
     - 0.0
@@ -51,9 +53,10 @@ unigrasptransformer:
     - -1.0
     - 0.0
     - 0.0
-    palm_dir_scale: 0.2
+    palm_dir_scale: 0.05
     show_fingertips: true
     fingertip_marker_size: 0.01
+    fingertip_body_exprs: []
     warp_on_reset: true
     fingertip_local_offsets:
     - - -0.11199995130300522

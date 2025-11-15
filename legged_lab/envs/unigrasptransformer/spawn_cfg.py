@@ -70,6 +70,8 @@ class UniGraspTransformerObjectSpawnCfg:
 class UniGraspTransformerHandSpawnCfg:
     """Root pose defaults for the Inspire Hand articulation."""
 
+    asset_type: str = "shadowhand"
+    asset_path: str | None = None
     pos: tuple[float, float, float] = (0.0, 0.0, 0.75)
     orientation_xyzw: tuple[float, float, float, float] = (
         0.0,
@@ -85,6 +87,7 @@ class UniGraspTransformerHandSpawnCfg:
     show_fingertips: bool = True
     fingertip_marker_size: float = 0.01
     fingertip_local_offsets: list[tuple[float, float, float]] = ()  # per-tip local offsets (hand-root frame)
+    fingertip_body_exprs: tuple[str, ...] = ()
     # Behavior
     warp_on_reset: bool = True
 
@@ -254,6 +257,8 @@ def load_unigrasp_config(spawn_cfg: UniGraspTransformerSpawnCfg, yaml_path: Path
 
     # Hand
     h = ucfg.get("hand", {})
+    spawn_cfg.hand.asset_type = h.get("asset_type", spawn_cfg.hand.asset_type)
+    spawn_cfg.hand.asset_path = h.get("asset_path", spawn_cfg.hand.asset_path)
     spawn_cfg.hand.pos = _as_tuple(h.get("pos", spawn_cfg.hand.pos), 3) or spawn_cfg.hand.pos
     spawn_cfg.hand.orientation_xyzw = _as_tuple(h.get("rot_xyzw", spawn_cfg.hand.orientation_xyzw), 4) or spawn_cfg.hand.orientation_xyzw
     # Optional hand overlays
@@ -265,6 +270,9 @@ def load_unigrasp_config(spawn_cfg: UniGraspTransformerSpawnCfg, yaml_path: Path
     spawn_cfg.hand.show_fingertips = bool(h.get("show_fingertips", spawn_cfg.hand.show_fingertips))
     spawn_cfg.hand.fingertip_marker_size = float(h.get("fingertip_marker_size", spawn_cfg.hand.fingertip_marker_size))
     spawn_cfg.hand.warp_on_reset = bool(h.get("warp_on_reset", spawn_cfg.hand.warp_on_reset))
+    exprs = h.get("fingertip_body_exprs")
+    if exprs:
+        spawn_cfg.hand.fingertip_body_exprs = tuple(exprs)
     fto = h.get("fingertip_local_offsets", None)
     if fto is not None:
         try:

@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-
 def _ensure_isaaclab_on_path():
     """Ensure the local Isaac Lab source tree is importable."""
 
@@ -52,7 +51,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", action="store_true", help="Run without rendering.")
     parser.add_argument("--num-envs", type=int, default=4, help="Number of parallel environments.")
-    parser.add_argument("--steps", type=int, default=120, help="Simulation steps to run for viewing.")
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=-1,
+        help="Simulation steps to run (-1 keeps the sim running until interrupted).",
+    )
     return parser.parse_args()
 
 
@@ -102,7 +106,7 @@ def main():
     print("[INFO] Scene Summary:")
     print(f"  - table: {'enabled' if tbl else 'disabled'}")
     print(f"  - object: {obj_status} (spawned={'yes' if obj_spawned else 'no'})")
-    print(f"  - hand: pos={spawn_cfg.hand.pos}, rot_xyzw={spawn_cfg.hand.orientation_xyzw}")
+    print(f"  - hand: pos={spawn_cfg.hand.pos}, rot_xyzw={spawn_cfg.hand.orientation_xyzw}, asset={spawn_cfg.hand.asset_type}")
     # Echo object overlay/mesh flags from YAML so users can verify they were loaded
     print("[INFO] Object Flags (from YAML):")
     print(f"  - enable={obj_cfg.enable}, spawn_mesh={obj_cfg.spawn_mesh}")
@@ -169,8 +173,11 @@ def main():
     try:
         import torch
         actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
-        for _ in range(max(1, args.steps)):
+        step_i = 0
+        run_forever = args.steps < 0
+        while run_forever or step_i < args.steps:
             env.step(actions)
+            step_i += 1
     except KeyboardInterrupt:
         pass
 

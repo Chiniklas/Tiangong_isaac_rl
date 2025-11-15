@@ -35,6 +35,8 @@ class UniGraspTransformerEnv(BaseEnv):
         self._pc_fps_np = None
         self._pca_axes_np = None
         self._object_init_np = None
+        self._object_pc_local = None
+        self._object_pca_axes_tensor = None
         try:
             import numpy as _np
             if self._pc_fps_path:
@@ -47,6 +49,14 @@ class UniGraspTransformerEnv(BaseEnv):
                     self._object_init_np = _pkl.load(_f)
         except Exception:
             pass
+        if self._pc_fps_np is not None:
+            pts = torch.tensor(self._pc_fps_np, dtype=torch.float32)
+            pts = pts.unsqueeze(0).repeat(cfg.scene.num_envs, 1, 1)
+            self._object_pc_local = pts.to(cfg.device)
+        if self._pca_axes_np is not None:
+            axes = torch.tensor(self._pca_axes_np, dtype=torch.float32)
+            axes = axes.unsqueeze(0).repeat(cfg.scene.num_envs, 1, 1)
+            self._object_pca_axes_tensor = axes.to(cfg.device)
 
         # Default object pose from scene if object exists; otherwise fall back to zeros
         if cfg.scene.grasp_object is not None:
@@ -106,7 +116,9 @@ class UniGraspTransformerEnv(BaseEnv):
 
         self._set_object_pose()
 
-        fingertip_patterns = ["Link48", "Link4", "Link14", "Link24", "Link34"]
+        fingertip_patterns = list(
+            getattr(cfg.scene.spawn.hand, "fingertip_body_exprs", ("Link48", "Link4", "Link14", "Link24", "Link34"))
+        )
         fingertip_names = ["thumb", "index", "middle", "ring", "little"]
         tip_indices, tip_names = self.hand.find_bodies(name_keys=fingertip_patterns, preserve_order=True)
         if len(tip_indices) != len(fingertip_patterns):
@@ -201,122 +213,96 @@ class UniGraspTransformerEnv(BaseEnv):
             import numpy as _np  # type: ignore
             import omni.usd  # type: ignore
             from pxr import Gf, UsdGeom  # type: ignore
+        except Exception:
+            return
 
-            stage = omni.usd.get_context().get_stage()
+        stage = omni.usd.get_context().get_stage()
 
-            # Hand overlays
-            hand_spawn = self.cfg.scene.spawn.hand
-            if getattr(hand_spawn, "show_palm_dir", False):
-                try:
-                    dir_local = _np.array(hand_spawn.palm_dir_local, dtype=_np.float32)
-                    scale = float(hand_spawn.palm_dir_scale)
-                    a0 = (0.0, 0.0, 0.0)
-                    a1 = (float(scale * dir_local[0]), float(scale * dir_local[1]), float(scale * dir_local[2]))
-                    for i in range(self.num_envs):
-                        debug_root = f"/World/envs/env_{i}/Robot/Debug"
-                        UsdGeom.Xform.Define(stage, debug_root)
-                        curve = UsdGeom.BasisCurves.Define(stage, f"{debug_root}/PalmDir")
+        def _ensure_debug_root(env_idx: int, entity: str):
+            root = f"/World/envs/env_{env_idx}/{entity}/Debug"
+            UsdGeom.Xform.Define(stage, root)
+            return root
+
+        hand_spawn = self.cfg.scene.spawn.hand
+        if getattr(hand_spawn, "show_palm_dir", False):
+            dir_local = torch.tensor(hand_spawn.palm_dir_local, dtype=torch.float32)
+            dir_world = dir_local * float(hand_spawn.palm_dir_scale)
+            for env_idx in range(self.num_envs):
+                debug_root = _ensure_debug_root(env_idx, "Robot")
+                curve = UsdGeom.BasisCurves.Define(stage, f"{debug_root}/PalmDir")
+                curve.CreateTypeAttr("linear")
+                curve.CreateCurveVertexCountsAttr([2])
+                curve.CreateWidthsAttr([0.02])
+                curve.GetDisplayColorAttr().Set([Gf.Vec3f(0.95, 0.6, 0.1)])
+                curve.GetPointsAttr().Set(
+                    [
+                        Gf.Vec3f(0.0, 0.0, 0.0),
+                        Gf.Vec3f(float(dir_world[0]), float(dir_world[1]), float(dir_world[2])),
+                    ]
+                )
+
+        if getattr(hand_spawn, "show_fingertips", False):
+            size = float(getattr(hand_spawn, "fingertip_marker_size", 0.01))
+            offset_z = float(getattr(hand_spawn, "fingertip_offset_z", 0.015))
+            tip_points = self._compute_fingertip_debug_points()
+            if tip_points is None:
+                tip_points = self._compute_tip_body_points(offset_z)
+            if tip_points is not None:
+                for env_idx in range(self.num_envs):
+                    debug_root = _ensure_debug_root(env_idx, "Robot")
+                    tip_prim = UsdGeom.Points.Define(stage, f"{debug_root}/Fingertips")
+                    tip_prim.CreateWidthsAttr([size])
+                    tip_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.2, 0.95, 0.3)])
+                    pts = tip_points[env_idx].detach().cpu().numpy()
+                    tip_prim.GetPointsAttr().Set(
+                        [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts]
+                    )
+
+        spawn = self.cfg.scene.spawn.grasp_object
+        if self.obj is None or not getattr(spawn, "enable", False):
+            return
+
+        if getattr(spawn, "show_point_cloud", False) and getattr(spawn, "pc_fps", None):
+            try:
+                pc = _np.load(spawn.pc_fps).astype(_np.float32)
+            except Exception:
+                pc = None
+            if pc is not None:
+                pc_max = 4096
+                if pc.shape[0] > pc_max:
+                    sel = _np.random.permutation(pc.shape[0])[:pc_max]
+                    pc = pc[sel]
+                points = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pc]
+                for env_idx in range(self.num_envs):
+                    debug_root = _ensure_debug_root(env_idx, "Object")
+                    pc_prim = UsdGeom.Points.Define(stage, f"{debug_root}/ObjectPC")
+                    pc_prim.CreateWidthsAttr([0.01])
+                    pc_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.15, 0.85, 0.95)])
+                    pc_prim.GetPointsAttr().Set(points)
+
+        if getattr(spawn, "show_pca_axes", False) and getattr(spawn, "pca_axes", None):
+            try:
+                axes = _np.load(spawn.pca_axes).astype(_np.float32)
+            except Exception:
+                axes = None
+            if axes is not None:
+                colors = [(1.0, 0.3, 0.3), (0.3, 1.0, 0.3), (0.3, 0.3, 1.0)]
+                scale = 0.2
+                for env_idx in range(self.num_envs):
+                    debug_root = _ensure_debug_root(env_idx, "Object")
+                    for axis_idx in range(3):
+                        curve = UsdGeom.BasisCurves.Define(stage, f"{debug_root}/PCA_Axis_{axis_idx}")
                         curve.CreateTypeAttr("linear")
                         curve.CreateCurveVertexCountsAttr([2])
                         curve.CreateWidthsAttr([0.02])
-                        curve.GetDisplayColorAttr().Set([Gf.Vec3f(0.95, 0.6, 0.1)])
-                        curve.GetPointsAttr().Set([Gf.Vec3f(*a0), Gf.Vec3f(*a1)])
-                except Exception:
-                    pass
-
-            if getattr(hand_spawn, "show_fingertips", False):
-                try:
-                    # Create placeholder points; they will be updated each step in world space
-                    size = float(getattr(hand_spawn, "fingertip_marker_size", 0.01))
-                    for i in range(self.num_envs):
-                        debug_root = f"/World/envs/env_{i}/Robot/Debug"
-                        UsdGeom.Xform.Define(stage, debug_root)
-                        tips = UsdGeom.Points.Define(stage, f"{debug_root}/Fingertips")
-                        tips.CreateWidthsAttr([size])
-                        tips.GetDisplayColorAttr().Set([Gf.Vec3f(0.2, 0.95, 0.3)])
-                        # initialize with current fingertip positions if available
-                        if hasattr(self, "_tip_body_ids"):
-                            import numpy as _np
-                            tip_pos_w = self.hand.data.body_pos_w[:, self._tip_body_ids, :]
-                            # convert world points to hand-root local
-                            hand_pos = self.hand.data.root_pos_w[0].detach().cpu().numpy()
-                            q = self.hand.data.root_quat_w[0].detach().cpu().numpy()  # xyzw
-                            ox, oy, oz, ow = q
-                            R = _np.array([
-                                [1 - 2 * (oy * oy + oz * oz), 2 * (ox * oy - oz * ow), 2 * (ox * oz + oy * ow)],
-                                [2 * (ox * oy + oz * ow), 1 - 2 * (ox * ox + oz * oz), 2 * (oy * oz - ox * ow)],
-                                [2 * (ox * oz - oy * ow), 2 * (oy * oz + ox * ow), 1 - 2 * (ox * ox + oy * oy)],
-                            ], dtype=_np.float32)
-                            pts_local = (tip_pos_w[0].detach().cpu().numpy() - hand_pos[None, :]) @ R
-                            # apply optional per-tip offsets from YAML
-                            offsets = getattr(self.cfg.scene.spawn.hand, "fingertip_local_offsets", ())
-                            if offsets and len(offsets) == pts_local.shape[0]:
-                                off = _np.asarray(offsets, dtype=_np.float32)
-                                pts_local = pts_local + off
-                            pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_local]
-                            tips.GetPointsAttr().Set(pts)
-                except Exception:
-                    pass
-
-            # Object overlays
-            spawn = self.cfg.scene.spawn.grasp_object
-            if self.obj is None or not getattr(spawn, "enable", False):
-                return
-
-            # Point cloud overlay
-            if getattr(spawn, "show_point_cloud", False) and getattr(spawn, "pc_fps", None):
-                try:
-                    pc = _np.load(spawn.pc_fps).astype(_np.float32)
-                    # downsample for responsiveness
-                    pc_max = 4096
-                    if pc.shape[0] > pc_max:
-                        sel = _np.random.permutation(pc.shape[0])[:pc_max]
-                        pc = pc[sel]
-                    for i in range(self.num_envs):
-                        debug_root = f"/World/envs/env_{i}/Object/Debug"
-                        UsdGeom.Xform.Define(stage, debug_root)
-                        pc_prim = UsdGeom.Points.Define(stage, f"{debug_root}/ObjectPC")
-                        pc_prim.CreateWidthsAttr([0.01])
-                        pc_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.15, 0.85, 0.95)])
-                        pc_prim.GetPointsAttr().Set([
-                            Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pc
-                        ])
-                        if pc.size > 0:
-                            mins = pc.min(axis=0)
-                            maxs = pc.max(axis=0)
-                            pc_prim.CreateExtentAttr([
-                                Gf.Vec3f(float(mins[0]), float(mins[1]), float(mins[2])),
-                                Gf.Vec3f(float(maxs[0]), float(maxs[1]), float(maxs[2])),
-                            ])
-                except Exception:
-                    pass
-
-            # PCA axes overlay
-            if getattr(spawn, "show_pca_axes", False) and getattr(spawn, "pca_axes", None):
-                try:
-                    axes = _np.load(spawn.pca_axes).astype(_np.float32)  # 3x3
-                    colors = [(1.0, 0.3, 0.3), (0.3, 1.0, 0.3), (0.3, 0.3, 1.0)]
-                    scale = 0.2
-                    for i in range(self.num_envs):
-                        debug_root = f"/World/envs/env_{i}/Object/Debug"
-                        for a in range(3):
-                            curve = UsdGeom.BasisCurves.Define(stage, f"{debug_root}/PCA_Axis_{a}")
-                            curve.CreateTypeAttr("linear")
-                            curve.CreateCurveVertexCountsAttr([2])
-                            curve.CreateWidthsAttr([0.02])
-                            curve.GetDisplayColorAttr().Set([Gf.Vec3f(*colors[a])])
-                            a0 = (0.0, 0.0, 0.0)
-                            a1 = (
-                                float(scale * axes[a, 0]),
-                                float(scale * axes[a, 1]),
-                                float(scale * axes[a, 2]),
-                            )
-                            curve.GetPointsAttr().Set([Gf.Vec3f(*a0), Gf.Vec3f(*a1)])
-                except Exception:
-                    pass
-        except Exception:
-            # overlays are best-effort; ignore on headless or missing deps
-            pass
+                        curve.GetDisplayColorAttr().Set([Gf.Vec3f(*colors[axis_idx])])
+                        a0 = Gf.Vec3f(0.0, 0.0, 0.0)
+                        a1 = Gf.Vec3f(
+                            float(scale * axes[axis_idx, 0]),
+                            float(scale * axes[axis_idx, 1]),
+                            float(scale * axes[axis_idx, 2]),
+                        )
+                        curve.GetPointsAttr().Set([a0, a1])
 
     def compute_current_observations(self):
         """Build observations to match the original UniGraspTransformer full-state layout.
@@ -510,26 +496,18 @@ class UniGraspTransformerEnv(BaseEnv):
             if getattr(hand_spawn, "show_fingertips", False):
                 import omni.usd  # type: ignore
                 from pxr import Gf, UsdGeom  # type: ignore
-                import numpy as _np
                 stage = omni.usd.get_context().get_stage()
-                tip_pos_w = self.hand.data.body_pos_w[:, self._tip_body_ids, :]
-                for i in range(self.num_envs):
-                    prim = UsdGeom.Points.Get(stage, f"/World/envs/env_{i}/Robot/Debug/Fingertips")
-                    if prim:
-                        hand_pos = self.hand.data.root_pos_w[i].detach().cpu().numpy()
-                        q = self.hand.data.root_quat_w[i].detach().cpu().numpy()  # xyzw
-                        ox, oy, oz, ow = q
-                        R = _np.array([
-                            [1 - 2 * (oy * oy + oz * oz), 2 * (ox * oy - oz * ow), 2 * (ox * oz + oy * ow)],
-                            [2 * (ox * oy + oz * ow), 1 - 2 * (ox * ox + oz * oz), 2 * (oy * oz - ox * ow)],
-                            [2 * (ox * oz - oy * ow), 2 * (oy * oz + ox * ow), 1 - 2 * (ox * ox + oy * oy)],
-                        ], dtype=_np.float32)
-                        pts_local = (tip_pos_w[i].detach().cpu().numpy() - hand_pos[None, :]) @ R
-                        offsets = getattr(self.cfg.scene.spawn.hand, "fingertip_local_offsets", ())
-                        if offsets and len(offsets) == pts_local.shape[0]:
-                            off = _np.asarray(offsets, dtype=_np.float32)
-                            pts_local = pts_local + off
-                        pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_local]
+                offset_z = float(getattr(hand_spawn, "fingertip_offset_z", 0.015))
+                tip_points = self._compute_fingertip_debug_points()
+                if tip_points is None:
+                    tip_points = self._compute_tip_body_points(offset_z)
+                if tip_points is not None:
+                    for i in range(self.num_envs):
+                        prim = UsdGeom.Points.Get(stage, f"/World/envs/env_{i}/Robot/Debug/Fingertips")
+                        if not prim:
+                            continue
+                        pts_world = tip_points[i].detach().cpu().numpy()
+                        pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_world]
                         prim.GetPointsAttr().Set(pts)
         except Exception:
             pass
@@ -553,4 +531,17 @@ class UniGraspTransformerEnv(BaseEnv):
         return reset_buf, time_out_buf
 
 
-__all__ = ["UniGraspTransformerEnv"]
+    def _compute_fingertip_debug_points(self) -> torch.Tensor | None:
+        """Return fingertip positions in world coords based on local-frame offsets."""
+        offsets = getattr(self.cfg.scene.spawn.hand, "fingertip_local_offsets", ())
+        if not offsets:
+            return None
+
+        offsets_tensor = torch.tensor(offsets, dtype=torch.float32, device=self.device)
+        hand_pos = self.hand.data.root_pos_w  # (N,3)
+        hand_rot = self.hand.data.root_quat_w  # (N,4)
+        repeated_offsets = offsets_tensor.unsqueeze(0).expand(self.num_envs, -1, -1)  # (N,num_tips,3)
+        rot_flat = hand_rot.unsqueeze(1).expand(-1, repeated_offsets.shape[1], -1).reshape(-1, 4)
+        vec_flat = repeated_offsets.reshape(-1, 3)
+        rotated = quat_apply(rot_flat, vec_flat).reshape(self.num_envs, repeated_offsets.shape[1], 3)
+        return rotated + hand_pos.unsqueeze(1)
