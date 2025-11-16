@@ -14,6 +14,7 @@ unigrasptransformer:
     - 0.0
     - 0.0
     - 1.0
+
   object:
     enable: true
     spawn_mesh: true
@@ -36,8 +37,9 @@ unigrasptransformer:
     pc_fps: null
     pca_axes: null
     object_init: null
+    
   hand:
-    asset_type: shadowhand
+    asset_type: inspirehand
     asset_path: null
     pos:
     - 0.0

@@ -62,6 +62,7 @@ FINGERTIP_PATTERNS = {
 @configclass
 @configclass
 class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
+    scene_cfg_cls: type = GraspSceneCfg
     seed: int = 42
     spawn: UniGraspTransformerSpawnCfg = UniGraspTransformerSpawnCfg()
     table: RigidObjectCfg | None = None
@@ -78,10 +79,28 @@ class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
         robot_cfg = deepcopy(HAND_ASSET_REGISTRY.get(hand_variant, INSPIRE_HAND_CFG))
         custom_asset_path = getattr(spawn_cfg.hand, "asset_path", None)
         if custom_asset_path:
-            asset_path = Path(custom_asset_path).expanduser().resolve()
+            asset_path = Path(custom_asset_path).expanduser()
+            if not asset_path.is_absolute():
+                repo_root = Path(__file__).resolve().parents[3]
+                candidate = (repo_root / asset_path).resolve()
+                if candidate.exists():
+                    asset_path = candidate
+                else:
+                    asset_path = (Path.cwd() / asset_path).resolve()
+            asset_path = asset_path.resolve()
             if not asset_path.exists():
                 raise FileNotFoundError(f"Hand asset path does not exist: {asset_path}")
-            if hasattr(robot_cfg.spawn, "asset_path"):
+            if asset_path.suffix.lower() == ".usd":
+                spawn_cfg_src = robot_cfg.spawn
+                robot_cfg.spawn = sim_utils.UsdFileCfg(
+                    usd_path=asset_path.as_posix(),
+                    articulation_props=getattr(spawn_cfg_src, "articulation_props", None),
+                    mass_props=getattr(spawn_cfg_src, "mass_props", None),
+                    rigid_props=getattr(spawn_cfg_src, "rigid_props", None),
+                    collision_props=getattr(spawn_cfg_src, "collision_props", None),
+                    activate_contact_sensors=getattr(spawn_cfg_src, "activate_contact_sensors", False),
+                )
+            elif hasattr(robot_cfg.spawn, "asset_path"):
                 robot_cfg.spawn.asset_path = asset_path.as_posix()
             elif hasattr(robot_cfg.spawn, "usd_path"):
                 robot_cfg.spawn.usd_path = asset_path.as_posix()

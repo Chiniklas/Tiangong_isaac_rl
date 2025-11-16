@@ -57,6 +57,12 @@ def parse_args():
         default=-1,
         help="Simulation steps to run (-1 keeps the sim running until interrupted).",
     )
+    parser.add_argument(
+        "--hand-usd",
+        type=Path,
+        default=None,
+        help="Optional USD asset to use for the hand instead of the default URDF.",
+    )
     return parser.parse_args()
 
 
@@ -82,6 +88,8 @@ def main():
 
     # Load config (spawn cfg auto-loads config.yaml in __post_init__)
     spawn_cfg = UniGraspTransformerSpawnCfg()
+    if args.hand_usd:
+        spawn_cfg.hand.asset_path = Path(args.hand_usd).expanduser().as_posix()
 
     # Validate object config if mesh is requested and random pick failed upstream
     if spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh and not spawn_cfg.grasp_object.static_usd:
