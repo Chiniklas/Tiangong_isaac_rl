@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional output directory for USDs. If omitted, USDs + metadata.json are written into each subset object folder.",
     )
-    parser.add_argument("--scale", type=str, default=None, help="Preferred scale tag to convert (e.g., 010, 012). Falls back to any.")
+    parser.add_argument("--scale", type=str, default="010", help="Preferred scale tag to convert (e.g., 010, 012). Falls back to any.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
     parser.add_argument(
         "--keep-mesh-usd",

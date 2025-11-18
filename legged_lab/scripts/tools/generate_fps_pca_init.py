@@ -62,6 +62,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--points", type=int, default=1024, help="Number of FPS points to save per object")
     p.add_argument("--force", action="store_true", help="Overwrite existing FPS/PCA/INIT if present")
     p.add_argument("--limit", type=int, default=None, help="Optional limit on number of objects to process")
+    p.add_argument(
+        "--scale",
+        type=str,
+        default="010",
+        help="Preferred coacd scale tag to sample (e.g., 010, 012). Falls back if unavailable.",
+    )
     return p.parse_args()
 
 
@@ -83,7 +89,7 @@ def _list_objects_from_usd_root(usd_root: Path) -> list[Path]:
     return [p for p in sorted(usd_root.iterdir()) if p.is_dir()]
 
 
-def _choose_mesh(obj_dir: Path) -> tuple[Path, str]:
+def _choose_mesh(obj_dir: Path, scale_hint: Optional[str] = None) -> tuple[Path, str]:
     coacd = obj_dir / "coacd"
     if not coacd.exists():
         # In centralized USD output, there may be no coacd; fallback to original subset copy if present
@@ -91,6 +97,15 @@ def _choose_mesh(obj_dir: Path) -> tuple[Path, str]:
     meshes = sorted(coacd.glob("decomposed_*.obj"))
     if not meshes:
         raise FileNotFoundError(f"No decomposed_*.obj under {coacd}")
+    if scale_hint:
+        for mesh in meshes:
+            if mesh.stem.endswith(scale_hint):
+                return mesh, scale_hint
+    pref = ["010", "012", "015", "008", "006"]
+    for tag in pref:
+        for mesh in meshes:
+            if mesh.stem.endswith(tag):
+                return mesh, tag
     mesh_path = meshes[0]
     scale_tag = mesh_path.stem.split("_")[-1]
     return mesh_path, scale_tag
@@ -112,10 +127,10 @@ def _fps(points: np.ndarray, k: int) -> np.ndarray:
     return idx
 
 
-def process_object(obj_dir: Path, out_dir: Path, points: int, force: bool) -> None:
+def process_object(obj_dir: Path, out_dir: Path, points: int, force: bool, scale_hint: Optional[str]) -> None:
     # Find decomposed OBJ in the subset copy (we assume subset holds the original coacd)
     try:
-        mesh_path, scale_tag = _choose_mesh(obj_dir)
+        mesh_path, scale_tag = _choose_mesh(obj_dir, scale_hint)
     except Exception as e:
         print(f"[WARN] Skip {obj_dir.name}: {e}")
         return
@@ -204,11 +219,10 @@ def main():
     for obj_dir in base_objects:
         # out_dir is where USD and metadata.json should live
         out_dir = obj_dir if args.usd_output is None else (args.usd_output.expanduser().resolve() / obj_dir.name)
-        process_object(obj_dir, out_dir, args.points, args.force)
+        process_object(obj_dir, out_dir, args.points, args.force, args.scale)
 
     print(f"[SUMMARY] Processed {len(base_objects)} objects in {subset_root}")
 
 
 if __name__ == "__main__":
     main()
-
