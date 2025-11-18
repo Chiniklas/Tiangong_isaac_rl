@@ -13,6 +13,7 @@ from .unigrasptransformer_cfg import UniGraspTransformerEnvCfg
 from .grasp_helpers import compute_reward, apply_palm_motion, warp_hand_to_default
 from .logging_utils import log_debug
 from .viz.observations_table import ObservationsTableViewer
+from .viz.rewards_table import RewardsTableViewer
 
 
 def _pad_trunc(x: torch.Tensor, target: int) -> torch.Tensor:
@@ -256,6 +257,15 @@ class UniGraspTransformerEnv(BaseEnv):
             except Exception as exc:
                 print(f"[WARN] Failed to init observation table viewer: {exc}")
                 self._enable_obs_table = False
+        self._enable_reward_table = os.environ.get("UNIGRASP_REWARD_TABLE", "0") == "1"
+        self._reward_table_env = int(os.environ.get("UNIGRASP_REWARD_ENV", "0"))
+        self._reward_table_viewer: Optional[RewardsTableViewer] = None
+        if self._enable_reward_table:
+            try:
+                self._reward_table_viewer = RewardsTableViewer()
+            except Exception as exc:
+                print(f"[WARN] Failed to init reward table viewer: {exc}")
+                self._enable_reward_table = False
 
     # (Removed) SDF buffer initialization
 
@@ -450,6 +460,25 @@ class UniGraspTransformerEnv(BaseEnv):
         if name == "hand_objects":
             return _linear("body_dist_", length)
         return _linear(f"{name}_", length)
+
+    def _update_reward_table(self, reward_logs: dict[str, torch.Tensor]) -> None:
+        if not (self._enable_reward_table and self._reward_table_viewer is not None):
+            return
+        env_idx = min(self._reward_table_env, self.num_envs - 1)
+        rows: list[tuple[str, float]] = []
+        for key in sorted(reward_logs.keys()):
+            tensor = torch.as_tensor(reward_logs[key])
+            if tensor.ndim == 0:
+                value = float(tensor.item())
+            else:
+                idx = min(env_idx, tensor.shape[0] - 1)
+                slice_tensor = tensor[idx]
+                if slice_tensor.ndim == 0:
+                    value = float(slice_tensor.item())
+                else:
+                    value = float(slice_tensor.reshape(-1)[0].item())
+            rows.append((key, value))
+        self._reward_table_viewer.update(rows)
 
     def _update_palm_dir_overlay(self) -> None:
         """Update the palm direction debug markers to follow the hand pose."""
@@ -727,6 +756,7 @@ class UniGraspTransformerEnv(BaseEnv):
         self.extras["log"].update(reward_logs)
         extras = self.extras
         extras["observations"]["critic"] = actor_obs
+        self._update_reward_table(reward_logs)
         self._update_palm_dir_overlay()
 
         return actor_obs, reward_buf, self.reset_buf, extras

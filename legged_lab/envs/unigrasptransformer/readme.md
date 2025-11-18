@@ -68,3 +68,20 @@ Picture the original Microsoft setup as a school schedule:
 5. **Repeat per object:** Their helper script `run_online_parallel.sh` simply loops over line ranges (e.g., 0–9) and repeats steps 1–4 on different GPUs. Each object gets its own “dedicated” PPO policy saved under `Logs/Results/results_train/<object_id>`.
 
 That’s the chunk we’re replicating now: a single-object PPO run using the `StateBasedGrasp` task. Later steps (trajectory saving and universal policy distillation) layer on top of those dedicated checkpoints.
+
+## Observation Visualizer (Debug Tool)
+
+Need to peek at the 400-D observation vector in real time? We added a GUI-based helper:
+
+1. **Run a scene or test script without `--headless`** (you need a display).
+2. **Set environment variables** before launching, e.g.
+   ```bash
+   UNIGRASP_OBS_TABLE=1 UNIGRASP_OBS_ENV=0 python legged_lab/scripts/unigrasptransformer/tests/test_spawn_scene.py
+   ```
+   - `UNIGRASP_OBS_TABLE=1` turns the visualizer on.
+   - `UNIGRASP_OBS_ENV=<index>` chooses which environment row to show (default 0).
+3. **Matplotlib windows pop out**, one per observation section. Each table lists the human-readable label (`palm_trans_x`, `goal_vec_z`, `obj_feat_42`, etc.) and the current value. Windows auto-refresh every sim step.
+
+Need to inspect reward components too? Set `UNIGRASP_REWARD_TABLE=1` (and optionally `UNIGRASP_REWARD_ENV=<idx>`) alongside the command above and a “Reward Table” window will list every reward term (`reward/init/...`, `reward/grasp/...`, penalties) for the chosen environment.
+
+Use this when calibrating reward weights, checking point-cloud inputs, or making sure the observation layout matches upstream. Turn it off (`UNIGRASP_OBS_TABLE=0`) before long PPO runs to avoid GUI overhead.
