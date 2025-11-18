@@ -19,7 +19,7 @@ from legged_lab.envs.base.base_config import (
 )
 from legged_lab.envs.base.base_env_config import BaseAgentCfg
 from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG
-from legged_lab.assets.hand_assets.shadowhand import SHADOW_HAND_CFG
+from legged_lab.assets.shadow_hand_unigrasptransformer.shadowhand import SHADOW_HAND_CFG
 from copy import deepcopy
 from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
 

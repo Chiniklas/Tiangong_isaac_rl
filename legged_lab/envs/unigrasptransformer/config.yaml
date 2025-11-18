@@ -32,15 +32,15 @@ unigrasptransformer:
     rot_xyzw:
     - 0.0
     - 0.0
-    - 1.0
+    - 0.0
     - 1.0
     pc_fps: null
     pca_axes: null
     object_init: null
     
   hand:
-    asset_type: inspirehand
-    asset_path: null
+    asset_type: shadowhand
+    asset_path: /home/chizhang/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_with_fingertip/shadow_hand_right/shadow_hand_right.usd
     pos:
     - 0.0
     - 0.0
