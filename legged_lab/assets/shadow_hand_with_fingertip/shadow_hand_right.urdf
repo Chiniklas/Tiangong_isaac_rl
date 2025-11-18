@@ -193,6 +193,48 @@
     <child link="imu"/>
     <origin rpy="-1.5707963 3.141592 0.0" xyz="0.01785 0.00765 0.049125"/>
   </joint>
+  <link name="palm_center_marker">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="1e-06"/>
+      <inertia ixx="1e-08" ixy="0" ixz="0" iyy="1e-08" iyz="0" izz="1e-08"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <sphere radius="0.01"/>
+      </geometry>
+      <material name="PalmCenterColor">
+        <color rgba="0.2 0.9 1.0 1.0"/>
+      </material>
+    </visual>
+  </link>
+  <joint name="palm_to_center_marker" type="fixed">
+    <parent link="palm"/>
+    <child link="palm_center_marker"/>
+    <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+  </joint>
+  <link name="palm_dir_marker">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="1e-06"/>
+      <inertia ixx="1e-08" ixy="0" ixz="0" iyy="1e-08" iyz="0" izz="1e-08"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.004 0.10 0.004"/>
+      </geometry>
+      <material name="PalmDirColor">
+        <color rgba="0.2 0.9 1.0 1.0"/>
+      </material>
+    </visual>
+  </link>
+  <joint name="center_to_dir_marker" type="fixed">
+    <parent link="palm_center_marker"/>
+    <child link="palm_dir_marker"/>
+    <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+  </joint>
   <link name="ffknuckle">
     <inertial>
       <origin rpy="0 0 0" xyz="0 0 0"/>

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
 from isaaclab.utils.buffers import DelayBuffer
+from isaaclab.utils.math import quat_apply
 from legged_lab.envs.base.base_env import BaseEnv
 
 from .unigrasptransformer_cfg import UniGraspTransformerEnvCfg
@@ -112,6 +113,11 @@ class UniGraspTransformerEnv(BaseEnv):
         self._non_sdf_max = None
         self._latest_aff_sdf = None
         self._latest_non_sdf = None
+        self._palm_dir_center_apis: list[Any] | None = None
+        self._palm_dir_curve_paths: list[str] | None = None
+        self._palm_dir_local: torch.Tensor | None = None
+        self._palm_dir_offset_local: torch.Tensor | None = None
+        self._palm_dir_scale: float = 0.0
 
         self._set_object_pose()
 
@@ -224,26 +230,33 @@ class UniGraspTransformerEnv(BaseEnv):
 
         hand_spawn = self.cfg.scene.spawn.hand
         if getattr(hand_spawn, "show_palm_dir", False):
-            dir_local = torch.tensor(hand_spawn.palm_dir_local, dtype=torch.float32)
-            dir_world = dir_local * float(hand_spawn.palm_dir_scale)
-            offset_local = torch.tensor(getattr(hand_spawn, "palm_dir_offset_local", (0.0, 0.0, 0.0)), dtype=torch.float32)
+            dtype = self.hand.data.root_pos_w.dtype
+            device = self.device
+            self._palm_dir_local = torch.tensor(hand_spawn.palm_dir_local, dtype=dtype, device=device)
+            self._palm_dir_offset_local = torch.tensor(
+                getattr(hand_spawn, "palm_dir_offset_local", (0.0, 0.0, 0.0)), dtype=dtype, device=device
+            )
+            self._palm_dir_scale = float(hand_spawn.palm_dir_scale)
+            self._palm_dir_center_apis = []
+            self._palm_dir_curve_paths = []
             for env_idx in range(self.num_envs):
                 debug_root = _ensure_debug_root(env_idx, "Robot")
-                curve = UsdGeom.BasisCurves.Define(stage, f"{debug_root}/PalmDir")
+                center_path = f"{debug_root}/PalmCenter"
+                center_xform = UsdGeom.Xform.Define(stage, center_path)
+                sphere = UsdGeom.Sphere.Define(stage, f"{center_path}/Geom")
+                sphere.CreateRadiusAttr(0.015)
+                sphere.GetDisplayColorAttr().Set([Gf.Vec3f(0.2, 0.9, 1.0)])
+                center_api = UsdGeom.XformCommonAPI(center_xform)
+                self._palm_dir_center_apis.append(center_api)
+
+                curve_path = f"{debug_root}/PalmDir"
+                curve = UsdGeom.BasisCurves.Define(stage, curve_path)
                 curve.CreateTypeAttr("linear")
                 curve.CreateCurveVertexCountsAttr([2])
                 curve.CreateWidthsAttr([0.02])
-                curve.GetDisplayColorAttr().Set([Gf.Vec3f(0.95, 0.6, 0.1)])
-                curve.GetPointsAttr().Set(
-                    [
-                        Gf.Vec3f(float(offset_local[0]), float(offset_local[1]), float(offset_local[2])),
-                        Gf.Vec3f(
-                            float(offset_local[0] + dir_world[0]),
-                            float(offset_local[1] + dir_world[1]),
-                            float(offset_local[2] + dir_world[2]),
-                        ),
-                    ]
-                )
+                curve.GetDisplayColorAttr().Set([Gf.Vec3f(0.2, 0.9, 1.0)])
+                curve.GetPointsAttr().Set([Gf.Vec3f(0.0, 0.0, 0.0), Gf.Vec3f(0.0, 0.0, 0.0)])
+                self._palm_dir_curve_paths.append(curve_path)
 
         spawn = self.cfg.scene.spawn.grasp_object
         if self.obj is None or not getattr(spawn, "enable", False):
@@ -290,6 +303,51 @@ class UniGraspTransformerEnv(BaseEnv):
                             float(scale * axes[axis_idx, 2]),
                         )
                         curve.GetPointsAttr().Set([a0, a1])
+
+        self._update_palm_dir_overlay()
+
+    def _update_palm_dir_overlay(self) -> None:
+        """Update the palm direction debug markers to follow the hand pose."""
+        if not (self._palm_dir_curve_paths and self._palm_dir_center_apis):
+            return
+        try:
+            import omni.usd  # type: ignore
+            from pxr import Gf, UsdGeom  # type: ignore
+        except Exception:
+            return
+
+        dir_local = self._palm_dir_local
+        offset_local = self._palm_dir_offset_local
+        if dir_local is None or offset_local is None:
+            return
+
+        dir_local = dir_local.unsqueeze(0).expand(self.num_envs, -1)
+        offset_local = offset_local.unsqueeze(0).expand(self.num_envs, -1)
+        hand_rot = self.hand.data.root_quat_w
+        hand_pos = self.hand.data.root_pos_w
+        dir_world = quat_apply(hand_rot, dir_local) * self._palm_dir_scale
+        offset_world = quat_apply(hand_rot, offset_local)
+        start_points = hand_pos + offset_world
+        end_points = start_points + dir_world
+
+        stage = omni.usd.get_context().get_stage()
+        for env_idx, curve_path in enumerate(self._palm_dir_curve_paths):
+            center_api = self._palm_dir_center_apis[env_idx]
+            start = start_points[env_idx].detach().cpu().tolist()
+            end = end_points[env_idx].detach().cpu().tolist()
+            try:
+                center_api.SetTranslate(Gf.Vec3f(float(start[0]), float(start[1]), float(start[2])))
+            except Exception:
+                pass
+            curve = UsdGeom.BasisCurves.Get(stage, curve_path)
+            if not curve:
+                continue
+            curve.GetPointsAttr().Set(
+                [
+                    Gf.Vec3f(float(start[0]), float(start[1]), float(start[2])),
+                    Gf.Vec3f(float(end[0]), float(end[1]), float(end[2])),
+                ]
+            )
 
     def compute_current_observations(self):
         """Build observations to match the original UniGraspTransformer full-state layout.
@@ -477,6 +535,7 @@ class UniGraspTransformerEnv(BaseEnv):
         self.extras["log"].update(reward_logs)
         extras = self.extras
         extras["observations"]["critic"] = actor_obs
+        self._update_palm_dir_overlay()
 
         return actor_obs, reward_buf, self.reset_buf, extras
 

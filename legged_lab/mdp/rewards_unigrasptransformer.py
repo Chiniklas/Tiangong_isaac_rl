@@ -260,35 +260,47 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
     bonus = torch.zeros_like(goal_dist)
     bonus = torch.where(hold_flag == hold_value, torch.where(goal_dist <= max_goal_dist, 1.0 / (1 + 10 * goal_dist), bonus), bonus)
 
-    init_reward = (
-        weights.delta_init_qpos_value * delta_init_qpos_value
-        + weights.right_hand_dist * right_hand_pc_dist
-        + weights.delta_target_hand_pca * delta_target_hand_pca
-        + weights.right_hand_exploration_dist * right_hand_exploration_dist
-    )
+    init_terms: Dict[str, torch.Tensor] = {
+        "reward/init/delta_init_qpos_value": weights.delta_init_qpos_value * delta_init_qpos_value,
+        "reward/init/right_hand_dist": weights.right_hand_dist * right_hand_pc_dist,
+        "reward/init/delta_target_hand_pca": weights.delta_target_hand_pca * delta_target_hand_pca,
+        "reward/init/right_hand_exploration_dist": weights.right_hand_exploration_dist * right_hand_exploration_dist,
+    }
+    init_reward = torch.zeros_like(next(iter(init_terms.values())))
+    for value in init_terms.values():
+        init_reward = init_reward + value
 
-    grasp_reward = (
-        weights.right_hand_body_dist * right_hand_body_pc_dist
-        + weights.right_hand_joint_dist * right_hand_joint_pc_dist
-        + weights.right_hand_finger_dist * right_hand_finger_pc_dist
-        + 2.0 * weights.right_hand_dist * right_hand_pc_dist
-        + weights.goal_dist * goal_dist
-        + weights.goal_rew * goal_rew
-        + weights.hand_up * hand_up
-        + weights.bonus * bonus
-        + weights.right_hand_pose * delta_qpos
-    )
+    grasp_terms: Dict[str, torch.Tensor] = {
+        "reward/grasp/right_hand_body_dist": weights.right_hand_body_dist * right_hand_body_pc_dist,
+        "reward/grasp/right_hand_joint_dist": weights.right_hand_joint_dist * right_hand_joint_pc_dist,
+        "reward/grasp/right_hand_finger_dist": weights.right_hand_finger_dist * right_hand_finger_pc_dist,
+        "reward/grasp/right_hand_dist": 2.0 * weights.right_hand_dist * right_hand_pc_dist,
+        "reward/grasp/goal_dist": weights.goal_dist * goal_dist,
+        "reward/grasp/goal_rew": weights.goal_rew * goal_rew,
+        "reward/grasp/hand_up": weights.hand_up * hand_up,
+        "reward/grasp/bonus": weights.bonus * bonus,
+        "reward/grasp/right_hand_pose": weights.right_hand_pose * delta_qpos,
+    }
+    grasp_reward = torch.zeros_like(init_reward)
+    for value in grasp_terms.values():
+        grasp_reward = grasp_reward + value
 
     reward = torch.where(hold_flag != hold_value, init_reward, grasp_reward)
     reward -= weights.action_penalty * action_penalty
 
     logs: Dict[str, torch.Tensor] = {
         "reward/init": init_reward.detach().cpu(),
+        "reward/init/total": init_reward.detach().cpu(),
         "reward/grasp": grasp_reward.detach().cpu(),
-        "reward/action_penalty": action_penalty.detach().cpu(),
-        "debug/hold_flag": hold_flag.detach().cpu(),
-        "debug/goal_dist": goal_dist.detach().cpu(),
+        "reward/grasp/total": grasp_reward.detach().cpu(),
     }
+    for key, value in init_terms.items():
+        logs[key] = value.detach().cpu()
+    for key, value in grasp_terms.items():
+        logs[key] = value.detach().cpu()
+    logs["reward/action_penalty"] = action_penalty.detach().cpu()
+    logs["debug/hold_flag"] = hold_flag.detach().cpu()
+    logs["debug/goal_dist"] = goal_dist.detach().cpu()
 
     return reward, logs
 

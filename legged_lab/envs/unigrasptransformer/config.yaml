@@ -50,7 +50,7 @@ unigrasptransformer:
     - 0.70710678
     - 0.0
     - 0.70710678
-    show_palm_dir: true
+    show_palm_dir: false
     palm_dir_local:
     - 1.0
     - 0.0
@@ -58,6 +58,6 @@ unigrasptransformer:
     palm_dir_offset_local:
     - 0.0
     - 0.0
-    - 0.3
+    - 0.0
     palm_dir_scale: 0.2
     warp_on_reset: true

@@ -23,7 +23,7 @@ spawn_scene._ensure_isaaclab_on_path()
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", action="store_true", help="Run without rendering.")
-    parser.add_argument("--num-envs", type=int, default=4, help="Number of parallel environments.")
+    parser.add_argument("--num-envs", type=int, default=1, help="Number of parallel environments.")
     parser.add_argument(
         "--steps",
         type=int,
@@ -45,6 +45,13 @@ def parse_args():
         "--gui",
         action="store_true",
         help="Launch the lightweight state GUI with observations/actions/rewards.",
+    )
+    parser.add_argument(
+        "--palm-axis",
+        type=str,
+        default="-x",
+        choices=["x", "y", "z", "-x", "-y", "-z"],
+        help="Local Inspire Hand axis to visualize for the script overlay.",
     )
     return parser.parse_args()
 
@@ -70,6 +77,38 @@ def _print_scene_summary(scene_cfg, spawn_cfg) -> None:
     print(f"  - show_pca_axes={getattr(obj_cfg, 'show_pca_axes', None)}")
     if getattr(obj_cfg, 'object_id', None):
         print(f"  - object_id={obj_cfg.object_id}")
+
+
+def _setup_debug_prims(num_envs: int):
+    import omni.usd
+    from pxr import Gf, UsdGeom
+
+    stage = omni.usd.get_context().get_stage()
+    UsdGeom.Xform.Define(stage, "/World/Debug")
+
+    def _mk_sphere(path: str, radius: float, color):
+        xform = UsdGeom.Xform.Define(stage, f"/World/Debug/{path}")
+        sphere = UsdGeom.Sphere.Define(stage, f"/World/Debug/{path}/Geom")
+        sphere.CreateRadiusAttr(radius)
+        sphere.GetDisplayColorAttr().Set([Gf.Vec3f(*color)])
+        return UsdGeom.XformCommonAPI(xform)
+
+    def _mk_line(path: str, color):
+        curve = UsdGeom.BasisCurves.Define(stage, f"/World/Debug/{path}")
+        curve.CreateTypeAttr("linear")
+        curve.CreateCurveVertexCountsAttr([2])
+        curve.CreatePointsAttr([Gf.Vec3f(0.0, 0.0, 0.0), Gf.Vec3f(0.0, 0.0, 0.1)])
+        curve.CreateWidthsAttr([0.005])
+        curve.GetDisplayColorAttr().Set([Gf.Vec3f(*color)])
+        return curve
+
+    palm_centers = []
+    palm_headings = []
+    for env_idx in range(num_envs):
+        palm_centers.append(_mk_sphere(f"PalmCenter_{env_idx}", 0.015, (0.1, 0.6, 1.0)))
+        palm_headings.append(_mk_line(f"PalmHeading_{env_idx}", (0.2, 0.9, 1.0)))
+
+    return palm_centers, palm_headings
 
 
 def _tensor_scalar(value) -> Optional[float]:
@@ -146,6 +185,7 @@ def main():
     simulation_app = app.app
 
     import torch
+    from isaaclab.utils.math import quat_apply
     from legged_lab.envs.unigrasptransformer.unigrasptransformer_env import UniGraspTransformerEnv
     from legged_lab.envs.unigrasptransformer.unigrasptransformer_cfg import (
         UniGraspTransformerEnvCfg,
@@ -178,10 +218,22 @@ def main():
     if not args.headless and not args.disable_keyboard:
         controller = KeyboardController()
     gui = launch_state_gui("UGTF Debug") if args.gui else None
+    from pxr import Gf  # type: ignore
 
     actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
     palm_trans = torch.zeros(env.num_envs, 3, device=env.device)
     palm_rot = torch.zeros_like(palm_trans)
+    palm_centers, palm_heading_curves = _setup_debug_prims(env.num_envs)
+
+    axis_map = {
+        "x": (1.0, 0.0, 0.0),
+        "y": (0.0, 1.0, 0.0),
+        "z": (0.0, 0.0, 1.0),
+        "-x": (-1.0, 0.0, 0.0),
+        "-y": (0.0, -1.0, 0.0),
+        "-z": (0.0, 0.0, -1.0),
+    }
+    local_axis = torch.tensor(axis_map[args.palm_axis], device=env.device, dtype=torch.float32)
 
     try:
         step_i = 0
@@ -211,6 +263,25 @@ def main():
 
             step_i += 1
 
+            hand_pos = env.hand.data.root_pos_w.detach().cpu().numpy()
+            hand_quat = env.hand.data.root_quat_w
+            local_axis_batch = local_axis.unsqueeze(0)
+            for env_idx in range(env.num_envs):
+                palm_centers[env_idx].SetTranslate(hand_pos[env_idx].tolist())
+                palm_dir = (
+                    quat_apply(hand_quat[env_idx : env_idx + 1], local_axis_batch)
+                    .squeeze(0)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+                palm_line = [hand_pos[env_idx], hand_pos[env_idx] + 0.12 * palm_dir]
+                palm_heading_curves[env_idx].GetPointsAttr().Set(
+                    [
+                        Gf.Vec3f(float(palm_line[0][0]), float(palm_line[0][1]), float(palm_line[0][2])),
+                        Gf.Vec3f(float(palm_line[1][0]), float(palm_line[1][1]), float(palm_line[1][2])),
+                    ]
+                )
     except KeyboardInterrupt:
         print("\n[INFO] Visualization interrupted by user. Shutting down...")
     finally:
