@@ -5,7 +5,6 @@ from typing import Optional
 import numpy as np
 import torch
 from isaaclab.utils.buffers import DelayBuffer
-from isaaclab.utils.math import quat_apply, quat_conjugate, quat_mul
 from legged_lab.envs.base.base_env import BaseEnv
 
 from .unigrasptransformer_cfg import UniGraspTransformerEnvCfg
@@ -227,6 +226,7 @@ class UniGraspTransformerEnv(BaseEnv):
         if getattr(hand_spawn, "show_palm_dir", False):
             dir_local = torch.tensor(hand_spawn.palm_dir_local, dtype=torch.float32)
             dir_world = dir_local * float(hand_spawn.palm_dir_scale)
+            offset_local = torch.tensor(getattr(hand_spawn, "palm_dir_offset_local", (0.0, 0.0, 0.0)), dtype=torch.float32)
             for env_idx in range(self.num_envs):
                 debug_root = _ensure_debug_root(env_idx, "Robot")
                 curve = UsdGeom.BasisCurves.Define(stage, f"{debug_root}/PalmDir")
@@ -236,27 +236,14 @@ class UniGraspTransformerEnv(BaseEnv):
                 curve.GetDisplayColorAttr().Set([Gf.Vec3f(0.95, 0.6, 0.1)])
                 curve.GetPointsAttr().Set(
                     [
-                        Gf.Vec3f(0.0, 0.0, 0.0),
-                        Gf.Vec3f(float(dir_world[0]), float(dir_world[1]), float(dir_world[2])),
+                        Gf.Vec3f(float(offset_local[0]), float(offset_local[1]), float(offset_local[2])),
+                        Gf.Vec3f(
+                            float(offset_local[0] + dir_world[0]),
+                            float(offset_local[1] + dir_world[1]),
+                            float(offset_local[2] + dir_world[2]),
+                        ),
                     ]
                 )
-
-        if getattr(hand_spawn, "show_fingertips", False):
-            size = float(getattr(hand_spawn, "fingertip_marker_size", 0.01))
-            offset_z = float(getattr(hand_spawn, "fingertip_offset_z", 0.015))
-            tip_points = self._compute_fingertip_debug_points()
-            if tip_points is None:
-                tip_points = self._compute_tip_body_points(offset_z)
-            if tip_points is not None:
-                for env_idx in range(self.num_envs):
-                    debug_root = _ensure_debug_root(env_idx, "Robot")
-                    tip_prim = UsdGeom.Points.Define(stage, f"{debug_root}/Fingertips")
-                    tip_prim.CreateWidthsAttr([size])
-                    tip_prim.GetDisplayColorAttr().Set([Gf.Vec3f(0.2, 0.95, 0.3)])
-                    pts = tip_points[env_idx].detach().cpu().numpy()
-                    tip_prim.GetPointsAttr().Set(
-                        [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts]
-                    )
 
         spawn = self.cfg.scene.spawn.grasp_object
         if self.obj is None or not getattr(spawn, "enable", False):
@@ -490,27 +477,6 @@ class UniGraspTransformerEnv(BaseEnv):
         self.extras["log"].update(reward_logs)
         extras = self.extras
         extras["observations"]["critic"] = actor_obs
-        # Update fingertip overlay positions if enabled
-        try:
-            hand_spawn = self.cfg.scene.spawn.hand
-            if getattr(hand_spawn, "show_fingertips", False):
-                import omni.usd  # type: ignore
-                from pxr import Gf, UsdGeom  # type: ignore
-                stage = omni.usd.get_context().get_stage()
-                offset_z = float(getattr(hand_spawn, "fingertip_offset_z", 0.015))
-                tip_points = self._compute_fingertip_debug_points()
-                if tip_points is None:
-                    tip_points = self._compute_tip_body_points(offset_z)
-                if tip_points is not None:
-                    for i in range(self.num_envs):
-                        prim = UsdGeom.Points.Get(stage, f"/World/envs/env_{i}/Robot/Debug/Fingertips")
-                        if not prim:
-                            continue
-                        pts_world = tip_points[i].detach().cpu().numpy()
-                        pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_world]
-                        prim.GetPointsAttr().Set(pts)
-        except Exception:
-            pass
 
         return actor_obs, reward_buf, self.reset_buf, extras
 
@@ -529,19 +495,3 @@ class UniGraspTransformerEnv(BaseEnv):
         reset_buf |= too_far | too_high | torch.isnan(palm_pos).any(dim=1)
 
         return reset_buf, time_out_buf
-
-
-    def _compute_fingertip_debug_points(self) -> torch.Tensor | None:
-        """Return fingertip positions in world coords based on local-frame offsets."""
-        offsets = getattr(self.cfg.scene.spawn.hand, "fingertip_local_offsets", ())
-        if not offsets:
-            return None
-
-        offsets_tensor = torch.tensor(offsets, dtype=torch.float32, device=self.device)
-        hand_pos = self.hand.data.root_pos_w  # (N,3)
-        hand_rot = self.hand.data.root_quat_w  # (N,4)
-        repeated_offsets = offsets_tensor.unsqueeze(0).expand(self.num_envs, -1, -1)  # (N,num_tips,3)
-        rot_flat = hand_rot.unsqueeze(1).expand(-1, repeated_offsets.shape[1], -1).reshape(-1, 4)
-        vec_flat = repeated_offsets.reshape(-1, 3)
-        rotated = quat_apply(rot_flat, vec_flat).reshape(self.num_envs, repeated_offsets.shape[1], 3)
-        return rotated + hand_pos.unsqueeze(1)

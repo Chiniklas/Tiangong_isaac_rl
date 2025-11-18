@@ -83,10 +83,8 @@ class UniGraspTransformerHandSpawnCfg:
     # Debug overlays for hand
     show_palm_dir: bool = True
     palm_dir_local: tuple[float, float, float] = (-1.0, 0.0, 0.0)
+    palm_dir_offset_local: tuple[float, float, float] = (0.0, 0.0, 0.0)
     palm_dir_scale: float = 0.2
-    show_fingertips: bool = True
-    fingertip_marker_size: float = 0.01
-    fingertip_local_offsets: list[tuple[float, float, float]] = ()  # per-tip local offsets (hand-root frame)
     fingertip_body_exprs: tuple[str, ...] = ()
     # Behavior
     warp_on_reset: bool = True
@@ -266,25 +264,14 @@ def load_unigrasp_config(spawn_cfg: UniGraspTransformerSpawnCfg, yaml_path: Path
     palm_dir = h.get("palm_dir_local", list(spawn_cfg.hand.palm_dir_local))
     if palm_dir is not None:
         spawn_cfg.hand.palm_dir_local = _as_tuple(palm_dir, 3) or spawn_cfg.hand.palm_dir_local
+    palm_offset = h.get("palm_dir_offset_local", list(spawn_cfg.hand.palm_dir_offset_local))
+    if palm_offset is not None:
+        spawn_cfg.hand.palm_dir_offset_local = _as_tuple(palm_offset, 3) or spawn_cfg.hand.palm_dir_offset_local
     spawn_cfg.hand.palm_dir_scale = float(h.get("palm_dir_scale", spawn_cfg.hand.palm_dir_scale))
-    spawn_cfg.hand.show_fingertips = bool(h.get("show_fingertips", spawn_cfg.hand.show_fingertips))
-    spawn_cfg.hand.fingertip_marker_size = float(h.get("fingertip_marker_size", spawn_cfg.hand.fingertip_marker_size))
     spawn_cfg.hand.warp_on_reset = bool(h.get("warp_on_reset", spawn_cfg.hand.warp_on_reset))
     exprs = h.get("fingertip_body_exprs")
     if exprs:
         spawn_cfg.hand.fingertip_body_exprs = tuple(exprs)
-    fto = h.get("fingertip_local_offsets", None)
-    if fto is not None:
-        try:
-            parsed = []
-            for item in fto:
-                if item is None:
-                    parsed.append((0.0, 0.0, 0.0))
-                else:
-                    parsed.append(_as_tuple(item, 3))
-            spawn_cfg.hand.fingertip_local_offsets = [tuple(map(float, t)) for t in parsed]
-        except Exception:
-            pass
 
     log_debug("Unified config loaded from %s" % yaml_path)
 
