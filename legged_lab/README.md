@@ -7,6 +7,23 @@ Inspire Hand dexterous manipulation environment.
 ## Script entry points
 - `scripts/train.py`, `scripts/play.py`, `scripts/play_amp_animation.py`, and `scripts/sim2sim.py` remain the upstream locomotion utilities for the TienKung humanoid tasks (`walk`, `run`, and their sensor variants).
 - `scripts/inspire_hand/train.py` and `scripts/inspire_hand/play.py` are the equivalents for the `inspirehand_grasp` task, with additional smoke tests under `scripts/inspire_hand/tests/`.
+- UniGraspTransformer can be trained and replayed via the shared RSL-RL entrypoints. After registering `unigrasptransformer` in `task_registry`, launch training with:
+  ```
+  python legged_lab/scripts/train.py \
+    --task unigrasptransformer \
+    --num_envs 64 \
+    --headless True \
+    --seed 42
+  ```
+  and replay a checkpoint (e.g., `logs/unigrasptransformer_grasp/<run>/model_0.pt`) with:
+  ```
+  python legged_lab/scripts/play.py \
+    --task unigrasptransformer \
+    --load_run 2025-11-18_15-01-22 \
+    --load_checkpoint model_0.pt \
+    --num_envs 1 \
+    --headless False
+  ```
 
 Refer to the top-level project `README.md` for installation steps and a rundown of the full workflow.
 

@@ -87,6 +87,16 @@ python legged_lab/scripts/train.py --task=walk --headless --logger=tensorboard -
 python legged_lab/scripts/train.py --task=run --headless --logger=tensorboard --num_envs=4096
 ```
 
+For UniGraspTransformer (dexterous manipulation), launch training with the registered task:
+
+```bash
+python legged_lab/scripts/train.py \
+  --task=unigrasptransformer \
+  --num_envs=64 \
+  --headless \
+  --seed=42
+```
+
 #### Play
 
 Run the trained policy.
@@ -94,6 +104,16 @@ Run the trained policy.
 ```bash
 python legged_lab/scripts/play.py --task=walk --num_envs=1
 python legged_lab/scripts/play.py --task=run --num_envs=1
+```
+
+Replay a UniGraspTransformer checkpoint (e.g., `logs/unigrasptransformer_grasp/<run>/model_0.pt`) with:
+
+```bash
+python legged_lab/scripts/play.py \
+  --task=unigrasptransformer \
+  --load_run=2025-11-18_15-01-22 \
+  --load_checkpoint=model_0.pt \
+  --num_envs=1
 ```
 
 #### Sim2Sim (MuJoCo)

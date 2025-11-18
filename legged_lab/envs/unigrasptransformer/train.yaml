@@ -1,0 +1,65 @@
+Infos:
+  save_name: Results
+
+Modes:
+  train_default: false
+  random_time: true
+  static_init: true
+  clean_obs: true
+  encode_obs_time: true
+  encode_hand_object_dist: true
+  zero_object_visual_feature: true
+  init_pca_hand: false
+  flag_joint_dist: false
+  flag_body_dist: true
+  double_update_step: true
+  double_iteration_step: false
+  double_update_half_iteration_step: false
+
+Models:
+  pi_hid_sizes: [1024, 1024, 512, 512]
+  vf_hid_sizes: [1024, 1024, 512, 512]
+  activation: elu
+  backbone_type: null
+  freeze_backbone: false
+  sigmoid_actions: false
+
+Weights:
+  num_action: 24
+  num_observation: 400
+  delta_init_qpos_value: -0.1
+  right_hand_pose: 0.0
+  right_hand_dist: -1.0
+  right_hand_finger_dist: -1.0
+  right_hand_joint_dist: 0.0
+  right_hand_body_dist: -1.0
+  max_finger_dist: 0.3
+  max_hand_dist: 0.06
+  max_goal_dist: 0.05
+  delta_target_hand_pca: 0.0
+  right_hand_exploration_dist: 0.0
+  goal_dist: -0.5
+  goal_rew: 1.0
+  hand_up: 2.0
+  bonus: 1.0
+  hand_up_goal_dist: 1.0
+
+Obs:
+  intervals:
+    hand_dofs: [0, 66]
+    hand_fingers: [66, 161]
+    hand_states: [161, 167]
+    actions: [167, 191]
+    objects: [191, 207]
+    object_visual: [207, 335]
+    times: [335, 364]
+    hand_objects: [364, 400]
+  names:
+  - hand_dofs
+  - hand_fingers
+  - hand_states
+  - actions
+  - objects
+  - object_visual
+  - times
+  - hand_objects
