@@ -1,0 +1,5 @@
+object:
+- /home/chizhang/Tiangong_isaac_rl/dataset/unigrasptransformer_asset/meshdatav3_scaled/subset_core10/core/mug-a8f7a0edd3edc3299e54b4084dc33544
+
+hand:
+- /home/chizhang/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_with_fingertip/shadow_hand_right

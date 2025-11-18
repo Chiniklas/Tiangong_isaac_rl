@@ -85,7 +85,7 @@ class UniGraspTransformerHandSpawnCfg:
     palm_dir_local: tuple[float, float, float] = (-1.0, 0.0, 0.0)
     palm_dir_offset_local: tuple[float, float, float] = (0.0, 0.0, 0.0)
     palm_dir_scale: float = 0.2
-    fingertip_body_exprs: tuple[str, ...] = ()
+    fingertip_body_exprs: tuple[str, ...] = ("fftip", "mftip", "rftip", "lftip", "thtip")
     # Behavior
     warp_on_reset: bool = True
 

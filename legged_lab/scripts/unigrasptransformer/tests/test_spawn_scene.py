@@ -50,7 +50,7 @@ _ensure_isaaclab_on_path()
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", action="store_true", help="Run without rendering.")
-    parser.add_argument("--num-envs", type=int, default=4, help="Number of parallel environments.")
+    parser.add_argument("--num-envs", type=int, default=1, help="Number of parallel environments.")
     parser.add_argument(
         "--steps",
         type=int,
