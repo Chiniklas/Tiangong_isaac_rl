@@ -228,7 +228,8 @@ For programmatic keyboard bindings inside environments, see `legged_lab/utils/ke
 
 
 ## Project TODOs
-- [ ] transfer RL pipeline from Raisim to Isaacsim
-- [ ] train a working RL agent based on one object and one grasp primitive
-- [ ] add point cloud sensors for real time perception
-- [ ] run RL agents on real hardware
+- [ ] transfer unigrasptransformer from isaacgym to isaacsim
+- [ ] run tests on 36 hand object distances
+- [ ] figure out how the original unigrasptransformer define the hand palm direction and how do they interact with object pca axes
+- [ ] figure out why the current observation zero out all the force terms
+- [ ] run the pipeline to train a dedicated policy

@@ -4,16 +4,13 @@ Imagine the robot hand is a kid stacking blocks. It needs to **see**, **move**, 
 
 ## Observation Space (What the hand "sees")
 
-- **Big picture:** Every time step we build a 400-number list. Think of it as a long sticker sheet with labeled sections.
-- **Sections we share with the upstream task:**
-  - **Hand joints (0–166):** 22 finger joints × (position, speed, pretend force). We center positions around the default pose just like upstream.
-  - **Fingertips (66–161):** For each tip we store where it is, which way it points, and how it moves. We rotate everything into the object’s frame so the hand always thinks “object at center,” mirroring `StateBasedGrasp`.
-  - **Palm pose (161–167):** Palm position + yaw/pitch/roll inside the object frame.
-  - **Last action (167–191):** Previous palm motion + finger deltas, also expressed relative to the object.
-  - **Object block (191–207+):** In the reference code this carries velocities, goal offsets, and optional PCA axes centered in the object frame. We match that layout: pose slots are zero (because we are already in object coordinates), velocities and goal vector are rotated into the same frame.
-  - **Object visual features (207–335):** Upstream fills this with PointNet embeddings (static or dynamic depending on config). Our port drops in centered point-cloud samples when we have them, or zeros when we don’t. Hooking the PN encoder/scaler would make this 1:1.
-  - **Time code (335–364):** Original task uses `progress_buf` plus a sinusoidal encoding. We now copy that exact formula so every time step gets the same “rhythm” stickers.
-  - **Hand vs. object distances (364–400):** Upstream computes min distances from many hand bodies to the object cloud. We reproduce that when we have the cloud, otherwise we write zeros so PPO still knows the slot exists.
+- **Big picture:** Every step still emits 400 numbers, but the first five sections now match **exactly** the five groups from Table 1 in the UniGraspTransformer paper (167 + 24 + 16 + 36 + 29 = 272). We tack on the 128-D visual feature tail afterward to stay layout-compatible with the original Isaac Gym task.
+- **Proprioception (0–166):** 22 finger joints × (position, velocity, pretend force) plus fingertip pose/velocity/force/torque and the palm pose in the object frame, all concatenated into a 167-D block.
+- **Previous action (167–190):** The last palm translation/rotation deltas and finger joint deltas, rotated into the current object frame so PPO and the offline distillation data see object-centric control history.
+- **Object state (191–206):** Object center, quaternion, linear velocity, angular velocity, and goal offset (3 + 4 + 3 + 3 + 3 = 16). We still express these values in the object frame, so position/orientation entries are zeroed when the hand already works in that frame.
+- **Hand–object distance (207–242):** Minimum distances from the same 36 canonical palm/finger points used upstream (19 synthetic offsets + 17 joint centers) to the object point cloud. Zeros will appear if the cloud is missing, but the slot remains reserved.
+- **Time (243–271):** Current normalized timestep plus a 28-D sinusoidal encoding copied from the upstream `progress_buf` helper so training curves line up with Table 1 (29 total values).
+- **Object visual add-on (272–399):** Static/dynamic PointNet embeddings in the official code. In our port we fill it with centered FPS point-cloud slices when available and otherwise leave it zero, which keeps the total vector length at 400 even if those features are unused.
 
 ## Action Space (How the hand moves)
 

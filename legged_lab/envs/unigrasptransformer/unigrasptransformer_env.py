@@ -77,6 +77,54 @@ def _world_to_object_quat(quat_xyzw: torch.Tensor, obj_conj: torch.Tensor) -> to
     return _wxyz_to_xyzw(merged)
 
 
+_HAND_JOINT_LABELS = (
+    "palm",
+    "ffknuckle",
+    "ffproximal",
+    "ffmiddle",
+    "mfknuckle",
+    "mfproximal",
+    "mfmiddle",
+    "rfknuckle",
+    "rfproximal",
+    "rfmiddle",
+    "lfknuckle",
+    "lfproximal",
+    "lfmiddle",
+    "thbase",
+    "thproximal",
+    "thmiddle",
+    "thdistal",
+)
+
+_PALM_OFFSET_VECS = (
+    torch.tensor([0.03, -0.005, 0.0], dtype=torch.float32),
+    torch.tensor([-0.03, -0.005, 0.0], dtype=torch.float32),
+    torch.tensor([0.0, -0.005, 0.03], dtype=torch.float32),
+    torch.tensor([0.0, -0.005, 0.06], dtype=torch.float32),
+    torch.tensor([0.03, -0.005, 0.06], dtype=torch.float32),
+    torch.tensor([0.015, -0.005, 0.015], dtype=torch.float32),
+    torch.tensor([-0.03, -0.005, 0.03], dtype=torch.float32),
+)
+
+_DEFAULT_OFFSET_LABELS = (
+    "ffknuckle",
+    "ffproximal",
+    "ffmiddle",
+    "mfknuckle",
+    "mfproximal",
+    "mfmiddle",
+    "rfknuckle",
+    "rfproximal",
+    "rfmiddle",
+    "lfknuckle",
+    "lfproximal",
+)
+
+_SPECIAL_OFFSET_VECS = {"thproximal": (torch.tensor([-0.015, 0.0, 0.02], dtype=torch.float32),)}
+_DEFAULT_OFFSET_VECTOR = torch.tensor([0.0, 0.0, 0.02], dtype=torch.float32)
+
+
 
 
 class UniGraspTransformerEnv(BaseEnv):
@@ -199,6 +247,8 @@ class UniGraspTransformerEnv(BaseEnv):
         self._local_tip_normals = torch.tensor(
             [[0.0, 0.0, 1.0]] * self._num_tips, dtype=torch.float, device=self.device
         )
+
+        self._init_hand_body_samples()
 
         if self.table is not None:
             if self._table_thickness > 0.0:
@@ -425,39 +475,37 @@ class UniGraspTransformerEnv(BaseEnv):
         def _linear(prefix: str, count: int) -> list[str]:
             return [f"{prefix}{i}" for i in range(count)]
 
-        if name == "hand_dofs" and length == 66:
-            return _linear("q", 22) + _linear("dq", 22) + _linear("tau", 22)
-        if name == "hand_fingers" and length == 95:
+        if name == "proprioception" and length == 167:
+            labels = _linear("q", 22) + _linear("dq", 22) + _linear("tau", 22)
             finger_names = ["thumb", "index", "middle", "ring", "little"]
-            entries = []
-            for idx, finger in enumerate(finger_names):
-                entries += [f"{finger}_pos_{axis}" for axis in "xyz"]
-                entries += [f"{finger}_quat_{axis}" for axis in ["x", "y", "z", "w"]]
-                entries += [f"{finger}_lin_{axis}" for axis in "xyz"]
-                entries += [f"{finger}_ang_{axis}" for axis in "xyz"]
-            entries += _linear("finger_force", length - len(entries))
-            return entries[:length]
-        if name == "hand_states" and length == 6:
-            return ["p_x", "p_y", "p_z", "roll", "pitch", "yaw"]
-        if name == "actions" and length == 24:
+            for finger in finger_names:
+                labels += [f"{finger}_pos_{axis}" for axis in "xyz"]
+                labels += [f"{finger}_quat_{axis}" for axis in ["x", "y", "z", "w"]]
+                labels += [f"{finger}_lin_{axis}" for axis in "xyz"]
+                labels += [f"{finger}_ang_{axis}" for axis in "xyz"]
+                labels += [f"{finger}_force_{axis}" for axis in "xyz"]
+                labels += [f"{finger}_torque_{axis}" for axis in "xyz"]
+            labels += ["p_x", "p_y", "p_z", "roll", "pitch", "yaw"]
+            return labels[:length]
+        if name == "previous_action" and length == 24:
             labels = [f"palm_trans_{axis}" for axis in "xyz"]
             labels += [f"palm_rot_{axis}" for axis in "xyz"]
             labels += _linear("joint_act_", length - len(labels))
             return labels
-        if name == "objects":
+        if name == "object_state":
             labels = [f"obj_pos_{axis}" for axis in "xyz"]
             labels += [f"obj_quat_{axis}" for axis in ["x", "y", "z", "w"]]
             labels += [f"obj_linvel_{axis}" for axis in "xyz"]
-            labels += [f"obj_angvel_{axis}" for axis in ["x", "y", "z", "w"]]
+            labels += [f"obj_angvel_{axis}" for axis in "xyz"]
             labels += [f"goal_vec_{axis}" for axis in "xyz"]
             return labels[:length]
         if name == "object_visual":
             return _linear("obj_feat_", length)
-        if name == "times":
+        if name == "time":
             labels = ["progress"]
             labels += _linear("time_enc_", length - 1)
             return labels
-        if name == "hand_objects":
+        if name == "hand_object_distance":
             return _linear("body_dist_", length)
         return _linear(f"{name}_", length)
 
@@ -523,6 +571,65 @@ class UniGraspTransformerEnv(BaseEnv):
                 ]
             )
 
+    def _init_hand_body_samples(self) -> None:
+        """Resolve body indices and offset specs for the 36-point hand distance features."""
+        if not hasattr(self, "hand"):
+            self._hand_joint_body_indices: list[int] = []
+            self._hand_joint_label_lookup = {}
+            self._hand_offset_specs = {}
+            return
+
+        indices: list[int] = []
+        lookup: dict[str, int] = {}
+        for label in _HAND_JOINT_LABELS:
+            idxs, _ = self.hand.find_bodies(name_keys=[label], preserve_order=True)
+            if not idxs:
+                raise RuntimeError(
+                    f"ShadowHand USD missing body containing '{label}'. "
+                    "Ensure the converted shadow_hand_right.urdf preserves upstream link names."
+                )
+            indices.append(idxs[0])
+            lookup[label] = len(indices) - 1
+
+        offset_specs: dict[str, list[torch.Tensor]] = {"palm": list(_PALM_OFFSET_VECS)}
+        for label in _DEFAULT_OFFSET_LABELS:
+            offset_specs.setdefault(label, []).append(_DEFAULT_OFFSET_VECTOR)
+        for label, vectors in _SPECIAL_OFFSET_VECS.items():
+            offset_specs.setdefault(label, []).extend(vectors)
+        total_offsets = sum(len(v) for v in offset_specs.values())
+        if total_offsets != 19:
+            raise RuntimeError(f"Hand offset spec must yield 19 points; currently {total_offsets}.")
+
+        self._hand_joint_body_indices = indices
+        self._hand_joint_label_lookup = lookup
+        self._hand_offset_specs = offset_specs
+
+    def _compute_hand_surface_points(self) -> torch.Tensor:
+        """Compute 19 synthetic palm/finger points plus 17 joint centers (36 total)."""
+        if not getattr(self, "_hand_joint_body_indices", None):
+            raise RuntimeError("Hand body indices not initialized; call _init_hand_body_samples first.")
+        body_quat = getattr(self.hand.data, "body_quat_w", None)
+        if body_quat is None:
+            raise RuntimeError("ShadowHand articulation does not expose body_quat_w.")
+        body_pos = self.hand.data.body_pos_w
+        joint_pos = body_pos[:, self._hand_joint_body_indices, :]
+        joint_rot = body_quat[:, self._hand_joint_body_indices, :]
+        num_envs = joint_pos.shape[0]
+        samples: list[torch.Tensor] = []
+        for label, vectors in self._hand_offset_specs.items():
+            slot = self._hand_joint_label_lookup[label]
+            base_pos = joint_pos[:, slot, :]
+            base_rot = joint_rot[:, slot, :]
+            for vec in vectors:
+                offset = vec.to(device=base_pos.device, dtype=base_pos.dtype).view(1, 3).expand(num_envs, -1)
+                rotated = quat_apply(base_rot, offset)
+                samples.append(base_pos + rotated)
+        if samples:
+            synthetic = torch.stack(samples, dim=1)
+        else:
+            synthetic = torch.zeros(num_envs, 0, 3, device=joint_pos.device, dtype=joint_pos.dtype)
+        return torch.cat([synthetic, joint_pos], dim=1)
+
     def compute_current_observations(self):
         """Build observations to match the original UniGraspTransformer layout with richer signals."""
 
@@ -552,7 +659,6 @@ class UniGraspTransformerEnv(BaseEnv):
         hand_dof_vel = _pad_trunc(dq, 22)
         hand_dof_force = torch.zeros(num_envs, 22, device=device, dtype=dtype)
         hand_dofs = torch.cat([hand_dof_pos, hand_dof_vel, hand_dof_force], dim=-1)
-        self._log_obs_block("hand_dofs", hand_dofs)
 
         # Hand fingers (95) – encode object-frame kinematics plus placeholder forces
         tip_pos_w = self.hand.data.body_pos_w[:, self._tip_body_ids, :]
@@ -582,7 +688,6 @@ class UniGraspTransformerEnv(BaseEnv):
         finger_kin = finger_kin.reshape(num_envs, -1)
         finger_ft = torch.zeros(num_envs, 30, device=device, dtype=dtype)
         hand_fingers = torch.cat([finger_kin, finger_ft], dim=-1)
-        self._log_obs_block("hand_fingers", hand_fingers)
 
         # Hand states (6) – palm pose in object frame
         hand_pos_w = self.hand.data.root_pos_w
@@ -591,7 +696,8 @@ class UniGraspTransformerEnv(BaseEnv):
         hand_rot_obj = _world_to_object_quat(hand_rot_w, obj_conj)
         hand_euler_obj = _quat_to_euler_xyz(hand_rot_obj)
         hand_states = torch.cat([hand_pos_obj, hand_euler_obj], dim=-1)
-        self._log_obs_block("hand_states", hand_states)
+        proprioception = torch.cat([hand_dofs, hand_fingers, hand_states], dim=-1)
+        self._log_obs_block("proprioception", proprioception)
 
         # Actions (24) – transform palm motion components into object frame
         last_act = getattr(self, "_last_actions", None)
@@ -602,9 +708,9 @@ class UniGraspTransformerEnv(BaseEnv):
             palm_trans = quat_apply(obj_conj, act24[:, :3])
             palm_rot = quat_apply(obj_conj, act24[:, 3:6])
             act24 = torch.cat([palm_trans, palm_rot, act24[:, 6:]], dim=-1)
-        self._log_obs_block("actions", act24)
+        self._log_obs_block("previous_action", act24)
 
-        # Objects (17) – keep zeroed pose (object frame) but encode velocities, goal vector, PCA axes
+        # Object state (16) – match Table 1 definition (center, quat, velocities, goal delta)
         goal_height = self._default_table_surface + 0.20
         goal_pos = torch.tensor(self._default_object_pos, device=device, dtype=dtype).unsqueeze(0).repeat(num_envs, 1)
         goal_pos[:, 2] = goal_height
@@ -616,12 +722,12 @@ class UniGraspTransformerEnv(BaseEnv):
                 torch.zeros(num_envs, 3, device=device, dtype=dtype),
                 torch.tensor([0.0, 0.0, 0.0, 1.0], device=device, dtype=dtype).expand(num_envs, 4),
                 obj_lin_vel_obj,
-                _pad_trunc(obj_ang_vel_obj, 4),
+                obj_ang_vel_obj,
                 goal_vec_obj,
             ],
             dim=-1,
         )
-        self._log_obs_block("objects", object_state)
+        self._log_obs_block("object_state", object_state)
 
         # Object visual (128) – use dataset embedding if available, else zeros
         object_points_world = None
@@ -649,21 +755,20 @@ class UniGraspTransformerEnv(BaseEnv):
         progress_steps = self.episode_length_buf.to(device=device, dtype=torch.float32)
         time_encoding = _positional_encoding(progress_steps, 28).to(dtype)
         times = torch.cat([progress_steps.unsqueeze(-1).to(dtype), time_encoding], dim=-1)
-        self._log_obs_block("times", times)
+        self._log_obs_block("time", times)
 
-        # Hand-object distances (36) – min distances from hand bodies to object cloud
-        hand_body_pos = getattr(self.hand.data, "body_pos_w", None)
-        if hand_body_pos is not None and object_points_world is not None:
-            dists = torch.cdist(hand_body_pos, object_points_world).min(dim=-1).values
-            hand_object_features = torch.zeros(num_envs, 36, device=device, dtype=dtype)
-            take = min(36, dists.shape[1])
-            hand_object_features[:, :take] = dists[:, :take]
+        # Hand-object distances (36) – min distances from canonical hand points to object cloud
+        if object_points_world is not None:
+            hand_points = self._compute_hand_surface_points()
+            dists = torch.cdist(hand_points, object_points_world).min(dim=-1).values
+            hand_object_features = dists
         else:
             hand_object_features = torch.zeros(num_envs, 36, device=device, dtype=dtype)
-        self._log_obs_block("hand_objects", hand_object_features)
+        self._log_obs_block("hand_object_distance", hand_object_features)
 
         actor_obs = torch.cat(
-            [hand_dofs, hand_fingers, hand_states, act24, object_state, object_visual, times, hand_object_features], dim=-1
+            [proprioception, act24, object_state, hand_object_features, times, object_visual],
+            dim=-1,
         )
         critic_obs = actor_obs
         return actor_obs, critic_obs
