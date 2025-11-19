@@ -6,10 +6,61 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-_ASSET_DIR = Path(__file__).resolve().parent
+_ASSET_DIR = Path(__file__).resolve().parent / "shadow_hand_unigrasptransformer"
 _URDF_PATH = _ASSET_DIR / "urdf" / "shadow_hand_description" / "shadowhand_with_fingertips.urdf"
 _USD_CACHE_DIR = _ASSET_DIR / "urdf" / "shadow_hand_description" / "usd_cache"
 _USD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Map the 22 UniGrasp DOFs (no wrist joints) onto the URDF names.
+_TARGET_INIT_JOINT_ORDER = (
+    "FFJ4",
+    "FFJ3",
+    "FFJ2",
+    "FFJ1",
+    "MFJ4",
+    "MFJ3",
+    "MFJ2",
+    "MFJ1",
+    "RFJ4",
+    "RFJ3",
+    "RFJ2",
+    "RFJ1",
+    "LFJ5",
+    "LFJ4",
+    "LFJ3",
+    "LFJ2",
+    "LFJ1",
+    "THJ5",
+    "THJ4",
+    "THJ3",
+    "THJ2",
+    "THJ1",
+)
+_TARGET_INIT_QPOS = (
+    0.1,
+    0.0,
+    0.6,
+    0.0,
+    0.0,
+    0.0,
+    0.6,
+    0.0,
+    -0.1,
+    0.0,
+    0.6,
+    0.0,
+    0.0,
+    -0.2,
+    0.0,
+    0.6,
+    0.0,
+    0.0,
+    1.2,
+    0.0,
+    -0.2,
+    0.0,
+)
+TARGET_INIT_JOINT_POS = dict(zip(_TARGET_INIT_JOINT_ORDER, _TARGET_INIT_QPOS))
 
 
 def _default_joint_drive():
@@ -37,8 +88,9 @@ SHADOW_HAND_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.75),
-        rot=(0.0, 0.70710678, 0.0, 0.70710678),
+        pos=(0.0, 0.0, 0.0),
+        rot=(0.0, 0.0, 0.0, 1.0),
+        joint_pos=TARGET_INIT_JOINT_POS,
     ),
     actuators={
         "all": ImplicitActuatorCfg(

@@ -91,6 +91,11 @@ def parse_args() -> argparse.Namespace:
         #default = "/home/chizhang/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_with_fingertip/shadow_hand_right/shadow_hand_right.usd",
         help="Optionally override the hand asset with a specific USD file.",
     )
+    parser.add_argument(
+        "--list-dofs",
+        action="store_true",
+        help="Print the robot joint names (and default DOF state) and exit.",
+    )
     return parser.parse_args()
 
 
@@ -289,11 +294,35 @@ def _print_special_section(title: str, entries: Sequence[SpecialPrim]) -> None:
         print(f" - {item.name} ({item.type_name}) reason={item.reason} path={item.path}")
 
 
+def _print_usd_joint_names(usd_path: Path) -> None:
+    """Print joint names from a USD file without launching the simulator."""
+
+    from pxr import Usd, UsdPhysics
+
+    stage = Usd.Stage.Open(usd_path.as_posix())
+    if stage is None:
+        raise RuntimeError(f"Failed to open USD stage: {usd_path}")
+    print(f"\n[Joint Names from {usd_path}]")
+    joints = []
+    for prim in stage.Traverse():
+        type_name = prim.GetTypeName()
+        if not type_name.endswith("Joint"):
+            continue
+        joint = UsdPhysics.Joint(prim)
+        if not joint:
+            continue
+        joints.append(prim.GetName())
+    if not joints:
+        print("  (no joints detected)")
+    else:
+        for idx, name in enumerate(sorted(joints)):
+            print(f" {idx:02d}: {name}")
+
+
 def _build_spawn_cfg(hand_usd: Path | None) -> "UniGraspTransformerSpawnCfg":
     """Create a spawn config that ignores config.yaml overrides."""
 
     cfg = UniGraspTransformerSpawnCfg()
-    cfg.config_path = None
     cfg.use_object_library = False
     cfg.table = UniGraspTransformerTableSpawnCfg()
     cfg.grasp_object = UniGraspTransformerObjectSpawnCfg(enable=False, spawn_mesh=False, show_point_cloud=False, show_pca_axes=False)
@@ -304,8 +333,29 @@ def _build_spawn_cfg(hand_usd: Path | None) -> "UniGraspTransformerSpawnCfg":
     return cfg
 
 
+def _print_joint_names(env, env_index: int) -> None:
+    names = getattr(env.robot.data, "joint_names", None)
+    if not names:
+        print("[WARN] Robot articulation does not expose joint_names.")
+        return
+    joint_pos_tensor = env.robot.data.joint_pos
+    if joint_pos_tensor.shape[0] <= env_index:
+        env.reset()
+    joint_pos = env.robot.data.joint_pos[env_index].detach().cpu().tolist()
+    defaults_attr = getattr(env.robot.data, "default_joint_pos", None)
+    default_pos = defaults_attr[env_index].detach().cpu().tolist() if defaults_attr is not None else None
+    print("\n[Joint Names / DOF State]")
+    for idx, name in enumerate(names):
+        cur = joint_pos[idx] if idx < len(joint_pos) else float("nan")
+        if default_pos is not None and idx < len(default_pos):
+            print(f" {idx:02d}: {name:>16s} current={cur:+.6f} default={default_pos[idx]:+.6f}")
+        else:
+            print(f" {idx:02d}: {name:>16s} current={cur:+.6f}")
+
+
 def main() -> None:
     args = parse_args()
+
     app_launcher = AppLauncher(headless=args.headless)
     simulation_app = app_launcher.app
 
@@ -323,6 +373,13 @@ def main() -> None:
 
     env = None
     try:
+        if args.list_dofs:
+            usd_path = args.hand_usd.expanduser().resolve() if args.hand_usd else Path(
+                "/home/chizhang/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_unigrasptransformer/open_ai_assets/hand/shadow_hand/shadow_hand.usd"
+            )
+            _print_usd_joint_names(usd_path)
+            return
+
         spawn_cfg = _build_spawn_cfg(args.hand_usd)
         num_envs = max(args.env_index + 1, 1)
         scene_cfg = UniGraspTransformerGraspSceneCfg(spawn=spawn_cfg, num_envs=num_envs)

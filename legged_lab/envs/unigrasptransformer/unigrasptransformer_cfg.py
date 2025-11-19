@@ -19,12 +19,12 @@ from legged_lab.envs.base.base_config import (
 )
 from legged_lab.envs.base.base_env_config import BaseAgentCfg
 from legged_lab.assets.handright9253.inspirehand import INSPIRE_HAND_CFG
-from legged_lab.assets.shadow_hand_unigrasptransformer.shadowhand import SHADOW_HAND_CFG
+from legged_lab.assets.shadowhand import SHADOW_HAND_CFG
 from copy import deepcopy
 from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
 
 from legged_lab.mdp.rewards_unigrasptransformer import RewardWeights
-from .spawn_cfg import UniGraspTransformerSpawnCfg, load_spawn_from_yaml
+from .spawn_cfg import UniGraspTransformerSpawnCfg
 from .logging_utils import log_debug
 from .train_config import load_reward_weights_from_train_yaml
 
@@ -110,17 +110,6 @@ class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
         log_debug(f"Selected hand asset '{hand_variant}'")
         if not getattr(spawn_cfg.hand, "fingertip_body_exprs", None):
             spawn_cfg.hand.fingertip_body_exprs = tuple(FINGERTIP_PATTERNS.get(hand_variant, FINGERTIP_PATTERNS["inspire"]))
-        # Load from YAML only if a config path exists and no runtime override was provided.
-        cfg_path = getattr(spawn_cfg, "config_path", None)
-        override_present = getattr(spawn_cfg.grasp_object, "static_usd", None) is not None
-        if spawn_cfg.grasp_object.enable and cfg_path and not override_present:
-            path = Path(cfg_path).expanduser()
-            if path.exists():
-                _ = load_spawn_from_yaml(spawn_cfg)
-            else:
-                # Skip loading if path is missing; tests may provide overrides later.
-                pass
-
         # Table
         if spawn_cfg.table.enable:
             table_spawn = sim_utils.CuboidCfg(

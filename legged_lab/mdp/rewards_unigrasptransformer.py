@@ -29,7 +29,31 @@ class RewardWeights:
     max_goal_dist: float = 0.05
 
 
-_TARGET_INIT_QPOS = torch.tensor(
+_RAW_TARGET_JOINT_ORDER = (
+    "FFJ4",
+    "FFJ3",
+    "FFJ2",
+    "FFJ1",
+    "MFJ4",
+    "MFJ3",
+    "MFJ2",
+    "MFJ1",
+    "RFJ4",
+    "RFJ3",
+    "RFJ2",
+    "RFJ1",
+    "LFJ5",
+    "LFJ4",
+    "LFJ3",
+    "LFJ2",
+    "LFJ1",
+    "THJ5",
+    "THJ4",
+    "THJ3",
+    "THJ2",
+    "THJ1",
+)
+_RAW_TARGET_INIT_QPOS = torch.tensor(
     [
         0.1,
         0.0,
@@ -56,7 +80,7 @@ _TARGET_INIT_QPOS = torch.tensor(
     ],
     dtype=torch.float32,
 )
-_TARGET_HAND_MASK = torch.tensor(
+_RAW_TARGET_HAND_MASK = torch.tensor(
     [
         0.0,
         0.0,
@@ -83,17 +107,45 @@ _TARGET_HAND_MASK = torch.tensor(
     ],
     dtype=torch.float32,
 )
-_TARGET_HAND_POSE = torch.zeros_like(_TARGET_INIT_QPOS)
+_RAW_TARGET_HAND_POSE = torch.zeros_like(_RAW_TARGET_INIT_QPOS)
+
+_TARGET_JOINT_NAMES = (
+    "FFJ1",
+    "FFJ2",
+    "FFJ3",
+    "FFJ4",
+    "MFJ1",
+    "MFJ2",
+    "MFJ3",
+    "MFJ4",
+    "RFJ1",
+    "RFJ2",
+    "RFJ3",
+    "RFJ4",
+    "LFJ1",
+    "LFJ2",
+    "LFJ3",
+    "LFJ4",
+    "LFJ5",
+    "THJ1",
+    "THJ2",
+    "THJ3",
+    "THJ4",
+    "THJ5",
+)
 
 
-def _match_dim(template: torch.Tensor, target_dim: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-    values = template.to(device=device, dtype=dtype)
-    if values.numel() == target_dim:
-        return values
-    if values.numel() > target_dim:
-        return values[:target_dim]
-    pad = torch.zeros(target_dim - values.numel(), device=device, dtype=dtype)
-    return torch.cat([values, pad], dim=0)
+def _reorder_raw_tensor(raw_tensor: torch.Tensor) -> torch.Tensor:
+    raw_map = {name: value for name, value in zip(_RAW_TARGET_JOINT_ORDER, raw_tensor.tolist())}
+    return torch.tensor([raw_map[name] for name in _TARGET_JOINT_NAMES], dtype=raw_tensor.dtype)
+
+
+_TARGET_INIT_QPOS = _reorder_raw_tensor(_RAW_TARGET_INIT_QPOS)
+_TARGET_HAND_MASK = _reorder_raw_tensor(_RAW_TARGET_HAND_MASK)
+_TARGET_HAND_POSE = _reorder_raw_tensor(_RAW_TARGET_HAND_POSE)
+_TARGET_INIT_QPOS_DICT = {name: value for name, value in zip(_TARGET_JOINT_NAMES, _TARGET_INIT_QPOS.tolist())}
+_TARGET_HAND_POSE_DICT = {name: value for name, value in zip(_TARGET_JOINT_NAMES, _TARGET_HAND_POSE.tolist())}
+_TARGET_HAND_MASK_DICT = {name: value for name, value in zip(_TARGET_JOINT_NAMES, _TARGET_HAND_MASK.tolist())}
 
 
 def _get_last_actions(env) -> torch.Tensor:
@@ -101,6 +153,45 @@ def _get_last_actions(env) -> torch.Tensor:
     if buffer is None:
         return torch.zeros(env.num_envs, env.num_actions, device=env.device)
     return buffer.buffer[:, -1, :]
+
+
+def _normalize_joint_name(name: str) -> str:
+    return name.split(":")[-1] if ":" in name else name
+
+
+def _select_reward_dofs(env) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str]]:
+    joint_names_raw = getattr(env.robot.data, "joint_names", None)
+    if joint_names_raw is None:
+        raise RuntimeError("Robot articulation does not expose joint_names.")
+    joint_pos_full = env.robot.data.joint_pos
+    device = joint_pos_full.device
+    dtype = joint_pos_full.dtype
+
+    selected = []
+    target_values = []
+    target_pose_values = []
+    mask_values = []
+    selected_names = []
+
+    for idx, name in enumerate(joint_names_raw):
+        normalized = _normalize_joint_name(name)
+        target_value = _TARGET_INIT_QPOS_DICT.get(normalized)
+        if target_value is None:
+            continue
+        selected.append(joint_pos_full[:, idx])
+        target_values.append(target_value)
+        target_pose_values.append(_TARGET_HAND_POSE_DICT.get(normalized, 0.0))
+        mask_values.append(_TARGET_HAND_MASK_DICT.get(normalized, 0.0))
+        selected_names.append(normalized)
+
+    if not selected:
+        raise RuntimeError("Failed to match any reward DOFs to joint names.")
+
+    joint_tensor = torch.stack(selected, dim=1)
+    target_tensor = torch.tensor(target_values, device=device, dtype=dtype)
+    target_pose_tensor = torch.tensor(target_pose_values, device=device, dtype=dtype)
+    mask_tensor = torch.tensor(mask_values, device=device, dtype=dtype)
+    return joint_tensor, target_tensor, target_pose_tensor, mask_tensor, selected_names
 
 
 def _batched_quat_apply(quat_xyzw: torch.Tensor, vecs: torch.Tensor) -> torch.Tensor:
@@ -231,13 +322,21 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
     heighest = torch.max(object_points[:, :, -1], dim=1)[0]
     lowest = torch.min(object_points[:, :, -1], dim=1)[0]
 
-    joint_pos = env.robot.data.joint_pos
-    target_init = _match_dim(_TARGET_INIT_QPOS, joint_pos.shape[1], env.device, joint_pos.dtype)
+    joint_pos_full = env.robot.data.joint_pos
+    joint_pos, target_init, target_hand_pose, target_hand_mask, reward_joint_names = _select_reward_dofs(env)
+    if not getattr(env, "_printed_reward_qpos_debug", False):
+        try:
+            current_vals = joint_pos[0].detach().cpu().tolist()
+            target_vals = target_init.detach().cpu().tolist()
+            print("[UniGraspReward] DOF targets:")
+            for name, cur, tgt in zip(reward_joint_names, current_vals, target_vals):
+                print(f"  {name}: current={cur:.6f}, target={tgt:.6f}")
+        except Exception:
+            pass
+        env._printed_reward_qpos_debug = True
     # Distance from each joint to the reference "home" configuration; encourages reset posture.
     delta_init_qpos_value = torch.linalg.norm(joint_pos - target_init.unsqueeze(0), dim=1)
 
-    target_hand_pose = _match_dim(_TARGET_HAND_POSE, joint_pos.shape[1], env.device, joint_pos.dtype)
-    target_hand_mask = _match_dim(_TARGET_HAND_MASK, joint_pos.shape[1], env.device, joint_pos.dtype)
     # Deviation from the desired finger curling pose (masking out unconstrained joints).
     delta_qpos = torch.linalg.norm(
         (torch.abs(joint_pos) - target_hand_pose.unsqueeze(0))
