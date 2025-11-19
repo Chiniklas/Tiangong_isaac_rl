@@ -96,7 +96,8 @@ def compute_reward(env) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         }
         return zero, logs
 
-    reward, term_logs = reward_terms.compute_hand_reward(env)
+    weights = getattr(env, "_reward_weights", None)
+    reward, term_logs = reward_terms.compute_hand_reward(env, weights=weights)
     logs: Dict[str, torch.Tensor] = {key: value.detach().cpu() for key, value in term_logs.items()}
 
     hand_pos = env.hand.data.root_pos_w

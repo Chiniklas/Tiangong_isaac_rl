@@ -180,6 +180,15 @@ def _object_pca_axes_world(env) -> Tuple[torch.Tensor | None, torch.Tensor | Non
 
 
 def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """Mirror the original UniGraspTransformer reward shaping, but break the math down term by term.
+
+    The reward is split into two phases:
+
+    * Pre-grasp (``hold_flag`` < 2): encourage exploration, correct palm posture, and joint alignment.
+    * Grasp/transport (``hold_flag`` == 2): track proximity to the mesh, object height, and goal position.
+
+    Each sub-term is annotated below so it is easy to tweak or port back to the Isaac Gym reference implementation.
+    """
     if weights is None:
         weights = RewardWeights()
 
@@ -188,6 +197,7 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
         raise RuntimeError("Object point cloud not available; ensure pc_fps metadata is provided.")
 
     actions = _get_last_actions(env)
+    # Quadratic action penalty to discourage high torques/velocities.
     action_penalty = torch.sum(actions ** 2, dim=1)
 
     hand_pos = env.hand.data.root_pos_w
@@ -197,19 +207,24 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
     goal_pos = torch.tensor(env._default_object_pos, device=env.device, dtype=obj_pos.dtype).unsqueeze(0).repeat(env.num_envs, 1)
     goal_pos[:, 2] = goal_height
 
+    # Distance from the object to the global goal pose.
     goal_dist = torch.linalg.norm(goal_pos - obj_pos, dim=1)
+    # Distance from the hand palm to the same goal pose (used when the object is airborne).
     goal_hand_dist = torch.linalg.norm(goal_pos - hand_pos, dim=1)
 
     tip_indices = getattr(env, "_tip_body_ids", [])
     tip_pos = env.hand.data.body_pos_w[:, tip_indices, :] if len(tip_indices) > 0 else None
     hand_body_pos = env.hand.data.body_pos_w
 
+    # Minimum distance from palm base to any object point.
     right_hand_pc_dist = _batch_sided_distance(hand_pos.unsqueeze(1), object_points).squeeze(-1)
     if tip_pos is not None and tip_pos.shape[1] > 0:
+        # Sum of fingertip-to-object-point minimum distances; vanishes when each tip touches the mesh.
         right_hand_finger_pc_dist = torch.sum(_batch_sided_distance(tip_pos, object_points), dim=-1)
     else:
         right_hand_finger_pc_dist = torch.zeros(env.num_envs, device=env.device, dtype=hand_pos.dtype)
     joint_dist = torch.sum(_batch_sided_distance(hand_body_pos, object_points), dim=-1)
+    # Aggregate distances between every hand body and the point cloud (scaled to match Isaac Gym weights).
     right_hand_joint_pc_dist = joint_dist * 5.0 / hand_body_pos.shape[1]
     right_hand_body_pc_dist = joint_dist * 5.0 / hand_body_pos.shape[1]
 
@@ -218,16 +233,24 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
 
     joint_pos = env.robot.data.joint_pos
     target_init = _match_dim(_TARGET_INIT_QPOS, joint_pos.shape[1], env.device, joint_pos.dtype)
+    # Distance from each joint to the reference "home" configuration; encourages reset posture.
     delta_init_qpos_value = torch.linalg.norm(joint_pos - target_init.unsqueeze(0), dim=1)
 
     target_hand_pose = _match_dim(_TARGET_HAND_POSE, joint_pos.shape[1], env.device, joint_pos.dtype)
     target_hand_mask = _match_dim(_TARGET_HAND_MASK, joint_pos.shape[1], env.device, joint_pos.dtype)
-    delta_qpos = torch.linalg.norm((torch.abs(joint_pos) - target_hand_pose.unsqueeze(0)) * target_hand_mask.unsqueeze(0) * (torch.abs(joint_pos) > 1.0), dim=1)
+    # Deviation from the desired finger curling pose (masking out unconstrained joints).
+    delta_qpos = torch.linalg.norm(
+        (torch.abs(joint_pos) - target_hand_pose.unsqueeze(0))
+        * target_hand_mask.unsqueeze(0)
+        * (torch.abs(joint_pos) > 1.0),
+        dim=1,
+    )
 
     _, target_hand_pca_rot = _object_pca_axes_world(env)
     if target_hand_pca_rot is None:
         delta_target_hand_pca = torch.zeros(env.num_envs, device=env.device, dtype=hand_pos.dtype)
     else:
+        # Angle between hand orientation and object PCA-aligned orientation.
         delta_target_hand_pca = 2.0 * torch.acos(
             torch.clamp(torch.abs(torch.sum(env.hand.data.root_quat_w * target_hand_pca_rot, dim=1)), 0.0, 1.0)
         )
@@ -237,8 +260,10 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
     max_goal_dist = weights.max_goal_dist
 
     hold_value = 2
+    # Binary flags that indicate whether the palm and fingertips are sufficiently close to the object.
     finger_flag = (right_hand_finger_pc_dist <= max_finger_dist).int()
     hand_flag = (right_hand_pc_dist <= max_hand_dist).int()
+    # Only when both flags are set (==2) do we consider the object "held".
     hold_flag = finger_flag + hand_flag
 
     object_points_sorted, _ = torch.sort(object_points, dim=-1)
@@ -246,19 +271,34 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
     rand_ids = torch.randint(0, subset.shape[1], (env.num_envs, 1), device=env.device)
     env_ids = torch.arange(env.num_envs, device=env.device).unsqueeze(1)
     exploration_target = subset[env_ids, rand_ids].squeeze(1)
+    # Encourage the palm to explore different object points before establishing a grasp.
     right_hand_exploration_dist = torch.linalg.norm(exploration_target - hand_pos, dim=1)
 
     goal_rew = torch.zeros_like(goal_dist)
+    # Once the object is held, reward reducing distance to the goal pose.
     goal_rew = torch.where(hold_flag == hold_value, 1.0 * (0.9 - 2.0 * goal_dist), goal_rew)
     hand_up = torch.zeros_like(goal_dist)
-    hand_up = torch.where(lowest >= 0.61, torch.where(hold_flag == hold_value, 0.1 + 0.1 * actions[:, 2], hand_up), hand_up)
+    # Small shaping term for lifting the object above the table (>=61 cm) while grasped.
+    hand_up = torch.where(
+        lowest >= 0.61, torch.where(hold_flag == hold_value, 0.1 + 0.1 * actions[:, 2], hand_up), hand_up
+    )
+    # Additional lift bonus once the object is high enough (>=80 cm) plus a goal-distance shaping term.
     hand_up = torch.where(
         lowest >= 0.80,
-        torch.where(hold_flag == hold_value, 0.2 - goal_hand_dist * 0 + weights.hand_up_goal_dist * (0.2 - goal_dist), hand_up),
+        torch.where(
+            hold_flag == hold_value,
+            0.2 - goal_hand_dist * 0 + weights.hand_up_goal_dist * (0.2 - goal_dist),
+            hand_up,
+        ),
         hand_up,
     )
     bonus = torch.zeros_like(goal_dist)
-    bonus = torch.where(hold_flag == hold_value, torch.where(goal_dist <= max_goal_dist, 1.0 / (1 + 10 * goal_dist), bonus), bonus)
+    # Final success bonus: inversely proportional to remaining goal distance when the object is near the target.
+    bonus = torch.where(
+        hold_flag == hold_value,
+        torch.where(goal_dist <= max_goal_dist, 1.0 / (1 + 10 * goal_dist), bonus),
+        bonus,
+    )
 
     init_terms: Dict[str, torch.Tensor] = {
         "reward/init/delta_init_qpos_value": weights.delta_init_qpos_value * delta_init_qpos_value,

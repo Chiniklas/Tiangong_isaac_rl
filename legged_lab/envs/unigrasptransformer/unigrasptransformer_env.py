@@ -199,6 +199,7 @@ class UniGraspTransformerEnv(BaseEnv):
                 headless = render_mode is None
 
         super().__init__(cfg, headless)
+        self._reward_weights = getattr(cfg, "reward_weights", None)
         log_debug(
             f"UniGraspTransformerEnv initialized (num_envs={self.num_envs}, object={getattr(cfg.scene.spawn.grasp_object, 'object_id', None)})"
         )

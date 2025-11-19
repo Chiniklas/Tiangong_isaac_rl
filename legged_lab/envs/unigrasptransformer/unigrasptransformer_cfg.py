@@ -23,8 +23,10 @@ from legged_lab.assets.shadow_hand_unigrasptransformer.shadowhand import SHADOW_
 from copy import deepcopy
 from legged_lab.utils.env_utils.scene_grasp import SceneCfg as GraspSceneCfg
 
+from legged_lab.mdp.rewards_unigrasptransformer import RewardWeights
 from .spawn_cfg import UniGraspTransformerSpawnCfg, load_spawn_from_yaml
 from .logging_utils import log_debug
+from .train_config import load_reward_weights_from_train_yaml
 
 
 @configclass
@@ -240,9 +242,17 @@ class UniGraspTransformerEnvCfg:
         ),
     )
     sim: SimCfg = SimCfg(dt=1 / 120.0, decimation=2)
+    reward_config_path: str = str(Path(__file__).with_name("cfg").joinpath("train.yaml"))
+    ppo_config_path: str = str(Path(__file__).with_name("cfg").joinpath("ppo_config.yaml"))
+    reward_weights: RewardWeights = RewardWeights()
 
     def __post_init__(self):
         log_debug(f"UniGraspTransformerEnvCfg ready (device={self.device})")
+        try:
+            path = Path(self.reward_config_path).expanduser()
+            self.reward_weights = load_reward_weights_from_train_yaml(path)
+        except Exception as exc:
+            log_debug(f"Failed to load reward config at {self.reward_config_path}: {exc}")
 
 
 @configclass

@@ -107,7 +107,7 @@ class UniGraspTransformerSpawnCfg:
         log_debug(f"SpawnCfg ready (config_path={self.config_path})")
         # Load unified YAML config (config.yaml next to this file) to override defaults
         try:
-            load_unigrasp_config(self, Path(__file__).with_name("config.yaml"))
+            load_unigrasp_config(self, Path(__file__).with_name("cfg").joinpath("config.yaml"))
         except Exception:
             # Keep defaults if config not found or malformed
             pass
