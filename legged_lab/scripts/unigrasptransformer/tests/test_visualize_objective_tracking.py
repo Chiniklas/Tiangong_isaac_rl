@@ -178,6 +178,7 @@ def main():
     if not args.headless and not args.disable_keyboard:
         controller = KeyboardController()
     gui = launch_state_gui("UGTF Debug") if args.gui else None
+    contact_viewer = spawn_scene._maybe_create_contact_viewer(env, args.headless)
 
     actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
     palm_trans = torch.zeros(env.num_envs, 3, device=env.device)
@@ -208,6 +209,8 @@ def main():
                 print(line)
             if gui is not None:
                 gui.update(step=step_i, obs=actor_obs, actions=actions, reward_total=reward_buf, reward_logs=logs)
+            if contact_viewer:
+                contact_viewer.update()
 
             step_i += 1
 

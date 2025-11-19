@@ -10,6 +10,11 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Sequence
+
+import torch
+
+CONTACT_BODY_KEYWORDS = ("ffdistal", "mfdistal", "rfdistal", "lfdistal", "thdistal")
 
 def _ensure_isaaclab_on_path():
     """Ensure the local Isaac Lab source tree is importable."""
@@ -45,6 +50,76 @@ def _ensure_isaaclab_on_path():
 
 
 _ensure_isaaclab_on_path()
+
+
+class ContactForceViewer:
+    """omni.ui panel that streams selected contact magnitudes."""
+
+    def __init__(self, env, env_index: int = 0, body_keywords: Sequence[str] = CONTACT_BODY_KEYWORDS):
+        import omni.ui as ui
+
+        self._ui = ui
+        self._env = env
+        self._env_index = env_index
+        self._sensor = env.contact_sensor
+        self._body_indices, self._body_labels = self._resolve_bodies(body_keywords)
+        if not self._body_indices:
+            raise RuntimeError("ContactForceViewer could not resolve any bodies to track.")
+
+        self._window = ui.Window(
+            title="Contact Forces",
+            width=320,
+            height=0,
+            visible=True,
+            dockPreference=ui.DockPreference.RIGHT_BOTTOM,
+        )
+        self._value_models = []
+        with self._window.frame:
+            with ui.VStack(spacing=5, height=0):
+                ui.Label("Per-link contact force (N)", alignment=ui.Alignment.CENTER)
+                for label in self._body_labels:
+                    with ui.HStack(spacing=10):
+                        ui.Label(label, width=140)
+                        drag = ui.FloatDrag(min=0.0, max=200.0, step=0.01)
+                        drag.enabled = False
+                        self._value_models.append(drag.model)
+
+    def _resolve_bodies(self, keywords: Sequence[str]) -> tuple[list[int], list[str]]:
+        names = self._sensor.body_names
+        indices: list[int] = []
+        labels: list[str] = []
+        lowered = [k.lower() for k in keywords]
+        for idx, name in enumerate(names):
+            lname = name.lower()
+            if any(key in lname for key in lowered):
+                indices.append(idx)
+                labels.append(name)
+        if not indices and names:
+            limit = min(6, len(names))
+            indices = list(range(limit))
+            labels = names[:limit]
+        return indices, labels
+
+    def update(self):
+        data = self._sensor.data.net_forces_w
+        if data is None or data.shape[0] <= self._env_index:
+            return
+        forces = data[self._env_index]
+        if forces is None:
+            return
+        magnitudes = torch.linalg.norm(forces[self._body_indices].to("cpu"), dim=-1).tolist()
+        for model, value in zip(self._value_models, magnitudes):
+            model.set_value(float(value))
+
+
+def _maybe_create_contact_viewer(env, headless: bool):
+    if headless:
+        return None
+    try:
+        return ContactForceViewer(env)
+    except Exception as exc:
+        print(f"[WARN] Contact viewer unavailable: {exc}")
+        return None
 
 
 def parse_args():
@@ -177,14 +252,17 @@ def main():
     except Exception as _e:
         print(f"[WARN] Overlay init skipped: {_e}")
 
+    contact_viewer = _maybe_create_contact_viewer(env, args.headless)
+
     # Step a few frames to display scene/overlays
     try:
-        import torch
         actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
         step_i = 0
         run_forever = args.steps < 0
         while run_forever or step_i < args.steps:
             env.step(actions)
+            if contact_viewer:
+                contact_viewer.update()
             step_i += 1
     except KeyboardInterrupt:
         pass

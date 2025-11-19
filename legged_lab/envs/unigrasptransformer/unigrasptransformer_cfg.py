@@ -98,7 +98,7 @@ class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
                     mass_props=getattr(spawn_cfg_src, "mass_props", None),
                     rigid_props=getattr(spawn_cfg_src, "rigid_props", None),
                     collision_props=getattr(spawn_cfg_src, "collision_props", None),
-                    activate_contact_sensors=getattr(spawn_cfg_src, "activate_contact_sensors", False),
+                    activate_contact_sensors=True,
                 )
             elif hasattr(robot_cfg.spawn, "asset_path"):
                 robot_cfg.spawn.asset_path = asset_path.as_posix()
