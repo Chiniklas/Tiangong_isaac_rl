@@ -87,8 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hand-usd",
         type=Path,
-        default="/home/chizhang/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_unigrasptransformer/open_ai_assets/hand/shadow_hand/shadow_hand.usd",
-        #default = "/home/chizhang/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_with_fingertip/shadow_hand_right/shadow_hand_right.usd",
+        default="/home/chizhang/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_with_fingertip/shadow_hand_right/shadow_hand_right.usd",
         help="Optionally override the hand asset with a specific USD file.",
     )
     parser.add_argument(
@@ -299,6 +298,8 @@ def _print_usd_joint_names(usd_path: Path) -> None:
 
     from pxr import Usd, UsdPhysics
 
+    if not usd_path.exists():
+        raise FileNotFoundError(f"Hand USD not found at {usd_path}")
     stage = Usd.Stage.Open(usd_path.as_posix())
     if stage is None:
         raise RuntimeError(f"Failed to open USD stage: {usd_path}")
