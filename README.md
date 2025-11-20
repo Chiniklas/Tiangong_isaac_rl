@@ -87,16 +87,6 @@ python legged_lab/scripts/train.py --task=walk --headless --logger=tensorboard -
 python legged_lab/scripts/train.py --task=run --headless --logger=tensorboard --num_envs=4096
 ```
 
-For UniGraspTransformer (dexterous manipulation), launch training with the registered task:
-
-```bash
-python legged_lab/scripts/train.py \
-  --task=unigrasptransformer \
-  --num_envs=64 \
-  --headless \
-  --seed=42
-```
-
 #### Play
 
 Run the trained policy.
@@ -104,16 +94,6 @@ Run the trained policy.
 ```bash
 python legged_lab/scripts/play.py --task=walk --num_envs=1
 python legged_lab/scripts/play.py --task=run --num_envs=1
-```
-
-Replay a UniGraspTransformer checkpoint (e.g., `logs/unigrasptransformer_grasp/<run>/model_0.pt`) with:
-
-```bash
-python legged_lab/scripts/play.py \
-  --task=unigrasptransformer \
-  --load_run=2025-11-18_15-01-22 \
-  --load_checkpoint=model_0.pt \
-  --num_envs=1
 ```
 
 #### Sim2Sim (MuJoCo)
@@ -216,9 +196,31 @@ For programmatic keyboard bindings inside environments, see `legged_lab/utils/ke
   python3 legged_lab/scripts/train.py --task=inspirehand_grasp --headless --num_envs=512 --logger=tensorboard
   ```
 
+- To train the GraspXL task, use the same entrypoint and swap the task name, e.g. `--task=graspxl_rl`.
+
+- UniGraspTransformer (dexterous manipulation) training:
+
+  ```bash
+  python legged_lab/scripts/train.py \
+    --task=unigrasptransformer \
+    --num_envs=64 \
+    --headless \
+    --seed=42
+  ```
+
 - Monitor metrics (`tensorboard --logdir=logs/<task_name>`) and track reward components such as `reward/reach`, `reward/lift`, `reward/hold`, and task-specific diagnostics (`grasp/aff_sdf_mean`, `reward/init`, `reward/grasp`).
 
 ### Policy Inference and Visualization
+
+- Replay a UniGraspTransformer checkpoint (e.g., `logs/unigrasptransformer_grasp/<run>/model_0.pt`) with:
+
+  ```bash
+  python legged_lab/scripts/play.py \
+    --task=unigrasptransformer \
+    --load_run=2025-11-18_15-01-22 \
+    --load_checkpoint=model_0.pt \
+    --num_envs=1
+  ```
 
 ### Sim2Real
 
@@ -228,7 +230,3 @@ For programmatic keyboard bindings inside environments, see `legged_lab/utils/ke
 
 
 ## Project TODOs
-- [ ] transfer RL pipeline from Raisim to Isaacsim
-- [ ] train a working RL agent based on one object and one grasp primitive
-- [ ] add point cloud sensors for real time perception
-- [ ] run RL agents on real hardware
