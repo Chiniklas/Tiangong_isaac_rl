@@ -259,6 +259,23 @@ def _object_point_cloud_world(env) -> torch.Tensor | None:
 def _object_pca_axes_world(env) -> Tuple[torch.Tensor | None, torch.Tensor | None]:
     axes_local = getattr(env, "_object_pca_axes_tensor", None)
     if axes_local is None:
+        # Lazy-load PCA axes if the tensor was not initialized (e.g., if the path existed but load failed earlier).
+        pca_path = getattr(env, "_pca_axes_path", None) or getattr(getattr(env.cfg.scene, "spawn", None), "grasp_object", None)
+        if pca_path and not isinstance(pca_path, str):
+            try:
+                pca_path = pca_path.pca_axes  # type: ignore[attr-defined]
+            except Exception:
+                pca_path = None
+        if pca_path:
+            try:
+                import numpy as _np
+
+                loaded = _np.load(pca_path)
+                axes_local = torch.tensor(loaded, dtype=env.hand.data.root_pos_w.dtype, device=env.device)
+                env._object_pca_axes_tensor = axes_local
+            except Exception:
+                axes_local = None
+    if axes_local is None:
         return None, None
     num_envs = env.num_envs
     if axes_local.shape[0] != num_envs:
@@ -353,7 +370,8 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
         delta_target_hand_pca = 2.0 * torch.acos(
             torch.clamp(torch.abs(torch.sum(env.hand.data.root_quat_w * target_hand_pca_rot, dim=1)), 0.0, 1.0)
         )
-
+    
+    #input()
     max_finger_dist = weights.max_finger_dist
     max_hand_dist = weights.max_hand_dist
     max_goal_dist = weights.max_goal_dist

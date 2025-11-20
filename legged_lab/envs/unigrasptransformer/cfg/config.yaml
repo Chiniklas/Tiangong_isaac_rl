@@ -20,7 +20,8 @@ unigrasptransformer:
     spawn_mesh: true
     show_point_cloud: true
     show_pca_axes: true
-    static_usd: null
+    # Set to a USD file or a dataset object directory containing metadata.json. If null, a dataset object is auto-picked.
+    object_path: /home/chizhang/Tiangong_isaac_rl/dataset/unigrasptransformer_asset/meshdatav3_scaled/subset_core10/core/jar-947cf0b19783a119154dddaf2978e13f
     size:
     - 0.1
     - 0.1
@@ -34,8 +35,6 @@ unigrasptransformer:
     - 0.0
     - 0.0
     - 1.0
-    pc_fps: null
-    pca_axes: null
     object_init: null
     
   hand:

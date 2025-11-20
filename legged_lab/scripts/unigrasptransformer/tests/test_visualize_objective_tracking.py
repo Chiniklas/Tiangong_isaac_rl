@@ -56,7 +56,7 @@ def _print_scene_summary(scene_cfg, spawn_cfg) -> None:
     if not obj_cfg.enable:
         obj_status = "disabled"
     elif obj_cfg.spawn_mesh:
-        obj_status = f"USD: {obj_cfg.static_usd or '<missing>'}"
+        obj_status = f"USD: {obj_cfg.object_path or '<missing>'}"
     else:
         obj_status = f"cuboid size={obj_cfg.size}"
 
@@ -162,9 +162,9 @@ def main():
 
     spawn_cfg = UniGraspTransformerSpawnCfg(config_path=cfg_path)
 
-    if spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh and not spawn_cfg.grasp_object.static_usd:
+    if spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh and not spawn_cfg.grasp_object.object_path:
         raise RuntimeError(
-            "Config error: object.spawn_mesh=true but object.static_usd is not set in config.yaml (and no dataset object was auto-picked)"
+            "Config error: object.spawn_mesh=true but object.object_path is not set to a USD file or object directory (and no dataset object was auto-picked)"
         )
 
     scene_cfg = UniGraspTransformerGraspSceneCfg(spawn=spawn_cfg, num_envs=args.num_envs)
@@ -225,3 +225,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# TODO:
+# 1- implement a joint position controller to test the delta_init_qpos_value reward
+# 2- test delta_target_hand_pca

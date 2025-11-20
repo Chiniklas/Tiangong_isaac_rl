@@ -167,8 +167,8 @@ def main():
         spawn_cfg.hand.asset_path = Path(args.hand_usd).expanduser().as_posix()
 
     # Validate object config if mesh is requested and random pick failed upstream
-    if spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh and not spawn_cfg.grasp_object.static_usd:
-        raise RuntimeError("Config error: object.spawn_mesh=true but object.static_usd is not set in config.yaml (and no dataset object was auto-picked)")
+    if spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh and not spawn_cfg.grasp_object.object_path:
+        raise RuntimeError("Config error: object.spawn_mesh=true but object.object_path is not set to a USD file or object directory (and no dataset object was auto-picked)")
 
     # Build scene and spawn env
     scene_cfg = UniGraspTransformerGraspSceneCfg(spawn=spawn_cfg, num_envs=args.num_envs)
@@ -182,7 +182,7 @@ def main():
     if not obj_cfg.enable:
         obj_status = "disabled"
     elif obj_cfg.spawn_mesh:
-        obj_status = f"USD: {obj_cfg.static_usd or '<missing>'}"
+        obj_status = f"USD: {obj_cfg.object_path or '<missing>'}"
     else:
         obj_status = f"cuboid size={obj_cfg.size}"
 
@@ -199,8 +199,8 @@ def main():
         print(f"  - object_id={obj_cfg.object_id}")
 
     # Post-validate object state
-    if obj_cfg.enable and obj_cfg.spawn_mesh and not obj_cfg.static_usd:
-        raise RuntimeError("Scene built with object.spawn_mesh=true but no object.static_usd configured")
+    if obj_cfg.enable and obj_cfg.spawn_mesh and not obj_cfg.object_path:
+        raise RuntimeError("Scene built with object.spawn_mesh=true but no object.object_path configured")
 
     # Create simple overlays if enabled in YAML and data is available
     try:

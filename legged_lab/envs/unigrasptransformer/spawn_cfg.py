@@ -48,7 +48,7 @@ class UniGraspTransformerObjectSpawnCfg:
     roughness: float | None = None
     asset_prim_name: str = "Object"
     object_id: Optional[str] = None
-    static_usd: Optional[str] = None
+    object_path: Optional[str] = None
     spawn_mesh: bool | None = None
     show_point_cloud: bool | None = None
     show_pca_axes: bool | None = None
@@ -58,7 +58,7 @@ class UniGraspTransformerObjectSpawnCfg:
 
     def __post_init__(self):
         log_debug(
-            f"ObjectSpawnCfg ready (static_usd={self.static_usd}, enable={self.enable})"
+            f"ObjectSpawnCfg ready (object_path={self.object_path}, enable={self.enable})"
         )
 
 
@@ -120,6 +120,7 @@ __all__ = [
 def load_unigrasp_config(spawn_cfg: UniGraspTransformerSpawnCfg, yaml_path: Path) -> None:
     """Load unified config.yaml and populate spawn_cfg (table/object/hand)."""
     import yaml
+    import json
 
     if not yaml_path.exists():
         raise FileNotFoundError(f"Unified config not found: {yaml_path}")
@@ -151,18 +152,65 @@ def load_unigrasp_config(spawn_cfg: UniGraspTransformerSpawnCfg, yaml_path: Path
     spawn_cfg.grasp_object.size = _as_tuple(o.get("size", spawn_cfg.grasp_object.size), 3) or spawn_cfg.grasp_object.size
     spawn_cfg.grasp_object.pos = _as_tuple(o.get("pos", spawn_cfg.grasp_object.pos), 3) or spawn_cfg.grasp_object.pos
     spawn_cfg.grasp_object.rot = _as_tuple(o.get("rot_xyzw", spawn_cfg.grasp_object.rot), 4) or spawn_cfg.grasp_object.rot
-    static_usd = o.get("static_usd", None)
-    spawn_cfg.grasp_object.static_usd = static_usd if static_usd else spawn_cfg.grasp_object.static_usd
+    spawn_cfg.grasp_object.object_path = o.get("object_path", spawn_cfg.grasp_object.object_path)
     spawn_cfg.grasp_object.pc_fps = o.get("pc_fps", spawn_cfg.grasp_object.pc_fps)
     spawn_cfg.grasp_object.pca_axes = o.get("pca_axes", spawn_cfg.grasp_object.pca_axes)
     spawn_cfg.grasp_object.object_init = o.get("object_init", spawn_cfg.grasp_object.object_init)
+
+    # If a specific object_path is provided, attempt to hydrate pc_fps / pca_axes / object_init from metadata.json.
+    # object_path can be a directory (containing metadata.json) or a USD file.
+    if spawn_cfg.grasp_object.object_path:
+        obj_path = Path(spawn_cfg.grasp_object.object_path).expanduser().resolve()
+        meta_path = None
+        if obj_path.is_file():
+            # If a USD is provided directly, search its parents for metadata.json.
+            for parent in obj_path.parents:
+                candidate = parent / "metadata.json"
+                if candidate.exists():
+                    meta_path = candidate
+                    break
+        elif obj_path.is_dir():
+            candidate = obj_path / "metadata.json"
+            meta_path = candidate if candidate.exists() else None
+
+        if meta_path:
+            try:
+                data = json.loads(meta_path.read_text())
+                base_dir = meta_path.parent
+
+                def _resolve(meta_value: str | None):
+                    if not meta_value:
+                        return None
+                    cand = Path(meta_value).expanduser()
+                    if not cand.is_absolute():
+                        cand = (base_dir / cand).resolve()
+                    if not cand.exists():
+                        # fallback to same filename in metadata directory
+                        cand2 = (base_dir / Path(meta_value).name).resolve()
+                        return cand2 if cand2.exists() else None
+                    return cand
+
+                # If pointing at a directory, replace object_path with the USD from metadata.
+                usd = data.get("static_usd") or data.get("object_path")
+                if usd:
+                    resolved = _resolve(usd)
+                    if resolved:
+                        spawn_cfg.grasp_object.object_path = resolved.as_posix()
+                pc_path = _resolve(data.get("pc_fps"))
+                pca_path = _resolve(data.get("pca_axes"))
+                init_path = _resolve(data.get("object_init"))
+                spawn_cfg.grasp_object.pc_fps = pc_path.as_posix() if pc_path else spawn_cfg.grasp_object.pc_fps
+                spawn_cfg.grasp_object.pca_axes = pca_path.as_posix() if pca_path else spawn_cfg.grasp_object.pca_axes
+                spawn_cfg.grasp_object.object_init = init_path.as_posix() if init_path else spawn_cfg.grasp_object.object_init
+            except Exception:
+                pass
 
     # Enforce coherence: when object is disabled, all dependent flags and assets are cleared
     if not spawn_cfg.grasp_object.enable:
         spawn_cfg.grasp_object.spawn_mesh = False
         spawn_cfg.grasp_object.show_point_cloud = False
         spawn_cfg.grasp_object.show_pca_axes = False
-        spawn_cfg.grasp_object.static_usd = None
+        spawn_cfg.grasp_object.object_path = None
         spawn_cfg.grasp_object.pc_fps = None
         spawn_cfg.grasp_object.pca_axes = None
         spawn_cfg.grasp_object.object_init = None
@@ -197,7 +245,7 @@ def _maybe_pick_random_dataset_object(spawn_cfg: UniGraspTransformerSpawnCfg) ->
     """Pick a random dataset object if mesh spawning is requested but no USD path provided."""
     if not (spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh):
         return
-    if getattr(spawn_cfg.grasp_object, "static_usd", None):
+    if getattr(spawn_cfg.grasp_object, "object_path", None):
         return
 
     import json
@@ -227,16 +275,30 @@ def _maybe_pick_random_dataset_object(spawn_cfg: UniGraspTransformerSpawnCfg) ->
     except Exception:
         return
 
-    usd = data.get("static_usd")
-    if not usd:
-        return
-    usd_path = Path(usd).expanduser().resolve()
-    if not usd_path.exists():
+    base_dir = meta_path.parent
+
+    def _resolve(meta_value: str | None):
+        if not meta_value:
+            return None
+        cand = Path(meta_value).expanduser()
+        if not cand.is_absolute():
+            cand = (base_dir / cand).resolve()
+        if not cand.exists():
+            cand2 = (base_dir / Path(meta_value).name).resolve()
+            return cand2 if cand2.exists() else None
+        return cand
+
+    usd = data.get("static_usd") or data.get("object_path")
+    usd_path = _resolve(usd)
+    if not usd_path:
         return
 
-    spawn_cfg.grasp_object.static_usd = usd_path.as_posix()
-    spawn_cfg.grasp_object.pc_fps = data.get("pc_fps")
-    spawn_cfg.grasp_object.pca_axes = data.get("pca_axes")
-    spawn_cfg.grasp_object.object_init = data.get("object_init")
+    spawn_cfg.grasp_object.object_path = usd_path.as_posix()
+    pc_path = _resolve(data.get("pc_fps"))
+    pca_path = _resolve(data.get("pca_axes"))
+    init_path = _resolve(data.get("object_init"))
+    spawn_cfg.grasp_object.pc_fps = pc_path.as_posix() if pc_path else spawn_cfg.grasp_object.pc_fps
+    spawn_cfg.grasp_object.pca_axes = pca_path.as_posix() if pca_path else spawn_cfg.grasp_object.pca_axes
+    spawn_cfg.grasp_object.object_init = init_path.as_posix() if init_path else spawn_cfg.grasp_object.object_init
     spawn_cfg.grasp_object.object_id = obj_dir.name
     log_debug(f"Picked random dataset object: {obj_dir.name}")

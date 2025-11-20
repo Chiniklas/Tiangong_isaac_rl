@@ -327,7 +327,7 @@ def _build_spawn_cfg(hand_usd: Path | None) -> "UniGraspTransformerSpawnCfg":
     cfg.use_object_library = False
     cfg.table = UniGraspTransformerTableSpawnCfg()
     cfg.grasp_object = UniGraspTransformerObjectSpawnCfg(enable=False, spawn_mesh=False, show_point_cloud=False, show_pca_axes=False)
-    cfg.grasp_object.static_usd = None
+    cfg.grasp_object.object_path = None
     cfg.hand = UniGraspTransformerHandSpawnCfg()
     if hand_usd is not None:
         cfg.hand.asset_path = hand_usd.expanduser().resolve().as_posix()

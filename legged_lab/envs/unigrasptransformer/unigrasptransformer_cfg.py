@@ -138,10 +138,10 @@ class UniGraspTransformerGraspSceneCfg(BaseSceneCfg):
             self.table = None
 
         # Grasp object (USD or simple cuboid)
-        static_usd = getattr(spawn_cfg.grasp_object, "static_usd", None)
-        if spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh and static_usd is not None:
+        object_path = getattr(spawn_cfg.grasp_object, "object_path", None)
+        if spawn_cfg.grasp_object.enable and spawn_cfg.grasp_object.spawn_mesh and object_path is not None:
             usd_spawn = sim_utils.UsdFileCfg(
-                usd_path=static_usd,
+                usd_path=object_path,
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     disable_gravity=spawn_cfg.grasp_object.disable_gravity,
                     max_depenetration_velocity=3.0,
