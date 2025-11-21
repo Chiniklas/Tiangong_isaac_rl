@@ -89,6 +89,10 @@ class UniGraspTransformerSpawnCfg:
     table: UniGraspTransformerTableSpawnCfg = UniGraspTransformerTableSpawnCfg()
     grasp_object: UniGraspTransformerObjectSpawnCfg = UniGraspTransformerObjectSpawnCfg()
     hand: UniGraspTransformerHandSpawnCfg = UniGraspTransformerHandSpawnCfg()
+    reward_joint_order: tuple[str, ...] | None = None
+    reward_init_qpos: tuple[float, ...] | None = None
+    reward_hand_mask: tuple[float, ...] | None = None
+    reward_hand_pose: tuple[float, ...] | None = None
     config_path: Optional[str] = str(_DEFAULT_CFG_PATH)
     use_object_library: bool = True
 
@@ -156,6 +160,18 @@ def load_unigrasp_config(spawn_cfg: UniGraspTransformerSpawnCfg, yaml_path: Path
     spawn_cfg.grasp_object.pc_fps = o.get("pc_fps", spawn_cfg.grasp_object.pc_fps)
     spawn_cfg.grasp_object.pca_axes = o.get("pca_axes", spawn_cfg.grasp_object.pca_axes)
     spawn_cfg.grasp_object.object_init = o.get("object_init", spawn_cfg.grasp_object.object_init)
+
+    # Reward target joints (optional)
+    rt = ucfg.get("reward_targets", {})
+    if rt:
+        order = rt.get("joint_order", None)
+        init_qpos = rt.get("init_qpos", None)
+        hand_mask = rt.get("hand_mask", None)
+        hand_pose = rt.get("hand_pose", None)
+        spawn_cfg.reward_joint_order = tuple(order) if order is not None else spawn_cfg.reward_joint_order
+        spawn_cfg.reward_init_qpos = _as_tuple(init_qpos, len(init_qpos)) if init_qpos is not None else spawn_cfg.reward_init_qpos
+        spawn_cfg.reward_hand_mask = _as_tuple(hand_mask, len(hand_mask)) if hand_mask is not None else spawn_cfg.reward_hand_mask
+        spawn_cfg.reward_hand_pose = _as_tuple(hand_pose, len(hand_pose)) if hand_pose is not None else spawn_cfg.reward_hand_pose
 
     # If a specific object_path is provided, attempt to hydrate pc_fps / pca_axes / object_init from metadata.json.
     # object_path can be a directory (containing metadata.json) or a USD file.

@@ -135,14 +135,14 @@ _TARGET_JOINT_NAMES = (
 )
 
 
-def _reorder_raw_tensor(raw_tensor: torch.Tensor) -> torch.Tensor:
-    raw_map = {name: value for name, value in zip(_RAW_TARGET_JOINT_ORDER, raw_tensor.tolist())}
+def _reorder_raw_tensor(raw_tensor: torch.Tensor, raw_order: tuple[str, ...]) -> torch.Tensor:
+    raw_map = {name: value for name, value in zip(raw_order, raw_tensor.tolist())}
     return torch.tensor([raw_map[name] for name in _TARGET_JOINT_NAMES], dtype=raw_tensor.dtype)
 
 
-_TARGET_INIT_QPOS = _reorder_raw_tensor(_RAW_TARGET_INIT_QPOS)
-_TARGET_HAND_MASK = _reorder_raw_tensor(_RAW_TARGET_HAND_MASK)
-_TARGET_HAND_POSE = _reorder_raw_tensor(_RAW_TARGET_HAND_POSE)
+_TARGET_INIT_QPOS = _reorder_raw_tensor(_RAW_TARGET_INIT_QPOS, _RAW_TARGET_JOINT_ORDER)
+_TARGET_HAND_MASK = _reorder_raw_tensor(_RAW_TARGET_HAND_MASK, _RAW_TARGET_JOINT_ORDER)
+_TARGET_HAND_POSE = _reorder_raw_tensor(_RAW_TARGET_HAND_POSE, _RAW_TARGET_JOINT_ORDER)
 _TARGET_INIT_QPOS_DICT = {name: value for name, value in zip(_TARGET_JOINT_NAMES, _TARGET_INIT_QPOS.tolist())}
 _TARGET_HAND_POSE_DICT = {name: value for name, value in zip(_TARGET_JOINT_NAMES, _TARGET_HAND_POSE.tolist())}
 _TARGET_HAND_MASK_DICT = {name: value for name, value in zip(_TARGET_JOINT_NAMES, _TARGET_HAND_MASK.tolist())}
@@ -159,7 +159,29 @@ def _normalize_joint_name(name: str) -> str:
     return name.split(":")[-1] if ":" in name else name
 
 
-def _select_reward_dofs(env) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str]]:
+def _get_target_specs(env) -> tuple[tuple[str, ...], torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return raw target specs from config when provided, otherwise fall back to defaults."""
+    raw_order = getattr(env, "_reward_target_joint_order", None) or _RAW_TARGET_JOINT_ORDER
+    raw_init_qpos = getattr(env, "_reward_init_qpos", None)
+    raw_hand_mask = getattr(env, "_reward_hand_mask", None)
+    raw_hand_pose = getattr(env, "_reward_hand_pose", None)
+
+    init_tensor = (
+        torch.tensor(raw_init_qpos, dtype=torch.float32) if raw_init_qpos is not None else _RAW_TARGET_INIT_QPOS
+    )
+    mask_tensor = (
+        torch.tensor(raw_hand_mask, dtype=torch.float32) if raw_hand_mask is not None else _RAW_TARGET_HAND_MASK
+    )
+    pose_tensor = torch.tensor(raw_hand_pose, dtype=torch.float32) if raw_hand_pose is not None else _RAW_TARGET_HAND_POSE
+    return tuple(raw_order), init_tensor, mask_tensor, pose_tensor
+
+
+def _select_reward_dofs(
+    env,
+    target_init_qpos: dict[str, float],
+    target_hand_pose: dict[str, float],
+    target_hand_mask: dict[str, float],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str]]:
     joint_names_raw = getattr(env.robot.data, "joint_names", None)
     if joint_names_raw is None:
         raise RuntimeError("Robot articulation does not expose joint_names.")
@@ -175,13 +197,13 @@ def _select_reward_dofs(env) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, 
 
     for idx, name in enumerate(joint_names_raw):
         normalized = _normalize_joint_name(name)
-        target_value = _TARGET_INIT_QPOS_DICT.get(normalized)
+        target_value = target_init_qpos.get(normalized)
         if target_value is None:
             continue
         selected.append(joint_pos_full[:, idx])
         target_values.append(target_value)
-        target_pose_values.append(_TARGET_HAND_POSE_DICT.get(normalized, 0.0))
-        mask_values.append(_TARGET_HAND_MASK_DICT.get(normalized, 0.0))
+        target_pose_values.append(target_hand_pose.get(normalized, 0.0))
+        mask_values.append(target_hand_mask.get(normalized, 0.0))
         selected_names.append(normalized)
 
     if not selected:
@@ -242,6 +264,24 @@ def _batch_sided_distance(sources: torch.Tensor, targets: torch.Tensor) -> torch
     return torch.cdist(sources, targets).min(dim=-1).values
 
 
+def _palm_world_position(env) -> torch.Tensor:
+    """Return palm link world position; fall back to articulation root if unavailable."""
+    body_pos = getattr(env.hand.data, "body_pos_w", None)
+    if body_pos is not None:
+        palm_idx = getattr(env, "_palm_body_index", None)
+        if palm_idx is None:
+            try:
+                indices, _ = env.hand.find_bodies(name_keys=["palm"], preserve_order=True)
+                if indices:
+                    palm_idx = indices[0]
+                    env._palm_body_index = palm_idx
+            except Exception:
+                palm_idx = None
+        if palm_idx is not None and palm_idx < body_pos.shape[1]:
+            return body_pos[:, palm_idx, :]
+    return env.hand.data.root_pos_w
+
+
 def _object_point_cloud_world(env) -> torch.Tensor | None:
     pts_local = getattr(env, "_object_pc_local", None)
     if pts_local is None:
@@ -290,57 +330,62 @@ def _object_pca_axes_world(env) -> Tuple[torch.Tensor | None, torch.Tensor | Non
 def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """Mirror the original UniGraspTransformer reward shaping, but break the math down term by term.
 
-    The reward is split into two phases:
-
-    * Pre-grasp (``hold_flag`` < 2): encourage exploration, correct palm posture, and joint alignment.
-    * Grasp/transport (``hold_flag`` == 2): track proximity to the mesh, object height, and goal position.
-
-    Each sub-term is annotated below so it is easy to tweak or port back to the Isaac Gym reference implementation.
+    The computation is staged for clarity:
+    1) Gather state needed for reward calculations.
+    2) Compute raw (unweighted) reward components.
+    3) Apply weights and aggregate the final reward/logs.
     """
     if weights is None:
         weights = RewardWeights()
 
+    # --- Constants.
+    max_finger_dist = weights.max_finger_dist
+    max_hand_dist = weights.max_hand_dist
+    max_goal_dist = weights.max_goal_dist
+    hold_value = 2
+
+    # --- Step 1: gather required data.
+    # Hand-related data.
+    hand_pos = _palm_world_position(env)
+    hand_body_pos = env.hand.data.body_pos_w
+    tip_indices = getattr(env, "_tip_body_ids", [])
+    tip_pos = env.hand.data.body_pos_w[:, tip_indices, :] if len(tip_indices) > 0 else None
+    actions = _get_last_actions(env)
+    action_penalty = torch.sum(actions ** 2, dim=1)  # Quadratic action penalty.
+
+    # Object-related data.
     object_points = _object_point_cloud_world(env)
     if object_points is None:
         raise RuntimeError("Object point cloud not available; ensure pc_fps metadata is provided.")
-
-    actions = _get_last_actions(env)
-    # Quadratic action penalty to discourage high torques/velocities.
-    action_penalty = torch.sum(actions ** 2, dim=1)
-
-    hand_pos = env.hand.data.root_pos_w
     obj_pos = env.obj.data.root_pos_w
-    obj_quat = env.obj.data.root_quat_w
     goal_height = env._default_table_surface + 0.20
     goal_pos = torch.tensor(env._default_object_pos, device=env.device, dtype=obj_pos.dtype).unsqueeze(0).repeat(env.num_envs, 1)
     goal_pos[:, 2] = goal_height
-
-    # Distance from the object to the global goal pose.
     goal_dist = torch.linalg.norm(goal_pos - obj_pos, dim=1)
-    # Distance from the hand palm to the same goal pose (used when the object is airborne).
-    goal_hand_dist = torch.linalg.norm(goal_pos - hand_pos, dim=1)
-
-    tip_indices = getattr(env, "_tip_body_ids", [])
-    tip_pos = env.hand.data.body_pos_w[:, tip_indices, :] if len(tip_indices) > 0 else None
-    hand_body_pos = env.hand.data.body_pos_w
-
-    # Minimum distance from palm base to any object point.
+    goal_hand_dist = torch.linalg.norm(goal_pos - hand_pos, dim=1)  # Hand-to-goal (airborne shaping).
+    # Distances from hand surfaces to object point cloud.
     right_hand_pc_dist = _batch_sided_distance(hand_pos.unsqueeze(1), object_points).squeeze(-1)
     if tip_pos is not None and tip_pos.shape[1] > 0:
-        # Sum of fingertip-to-object-point minimum distances; vanishes when each tip touches the mesh.
         right_hand_finger_pc_dist = torch.sum(_batch_sided_distance(tip_pos, object_points), dim=-1)
     else:
         right_hand_finger_pc_dist = torch.zeros(env.num_envs, device=env.device, dtype=hand_pos.dtype)
     joint_dist = torch.sum(_batch_sided_distance(hand_body_pos, object_points), dim=-1)
-    # Aggregate distances between every hand body and the point cloud (scaled to match Isaac Gym weights).
     right_hand_joint_pc_dist = joint_dist * 5.0 / hand_body_pos.shape[1]
     right_hand_body_pc_dist = joint_dist * 5.0 / hand_body_pos.shape[1]
-
-    heighest = torch.max(object_points[:, :, -1], dim=1)[0]
     lowest = torch.min(object_points[:, :, -1], dim=1)[0]
 
-    joint_pos_full = env.robot.data.joint_pos
-    joint_pos, target_init, target_hand_pose, target_hand_mask, reward_joint_names = _select_reward_dofs(env)
+    # Other data (joint states and orientation targets).
+    raw_order, raw_init_qpos, raw_hand_mask, raw_hand_pose = _get_target_specs(env)
+    target_init = _reorder_raw_tensor(raw_init_qpos, raw_order)
+    target_hand_mask = _reorder_raw_tensor(raw_hand_mask, raw_order)
+    target_hand_pose = _reorder_raw_tensor(raw_hand_pose, raw_order)
+    target_init_dict = {name: value for name, value in zip(_TARGET_JOINT_NAMES, target_init.tolist())}
+    target_hand_pose_dict = {name: value for name, value in zip(_TARGET_JOINT_NAMES, target_hand_pose.tolist())}
+    target_hand_mask_dict = {name: value for name, value in zip(_TARGET_JOINT_NAMES, target_hand_mask.tolist())}
+    joint_pos, target_init, target_hand_pose, target_hand_mask, reward_joint_names = _select_reward_dofs(
+        env, target_init_dict, target_hand_pose_dict, target_hand_mask_dict
+    )
+
     if not getattr(env, "_printed_reward_qpos_debug", False):
         try:
             current_vals = joint_pos[0].detach().cpu().tolist()
@@ -371,16 +416,9 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
             torch.clamp(torch.abs(torch.sum(env.hand.data.root_quat_w * target_hand_pca_rot, dim=1)), 0.0, 1.0)
         )
     
-    #input()
-    max_finger_dist = weights.max_finger_dist
-    max_hand_dist = weights.max_hand_dist
-    max_goal_dist = weights.max_goal_dist
-
-    hold_value = 2
-    # Binary flags that indicate whether the palm and fingertips are sufficiently close to the object.
+    # --- Step 2: compute raw reward components (no outer weights applied yet).
     finger_flag = (right_hand_finger_pc_dist <= max_finger_dist).int()
     hand_flag = (right_hand_pc_dist <= max_hand_dist).int()
-    # Only when both flags are set (==2) do we consider the object "held".
     hold_flag = finger_flag + hand_flag
 
     object_points_sorted, _ = torch.sort(object_points, dim=-1)
@@ -388,18 +426,15 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
     rand_ids = torch.randint(0, subset.shape[1], (env.num_envs, 1), device=env.device)
     env_ids = torch.arange(env.num_envs, device=env.device).unsqueeze(1)
     exploration_target = subset[env_ids, rand_ids].squeeze(1)
-    # Encourage the palm to explore different object points before establishing a grasp.
     right_hand_exploration_dist = torch.linalg.norm(exploration_target - hand_pos, dim=1)
 
     goal_rew = torch.zeros_like(goal_dist)
-    # Once the object is held, reward reducing distance to the goal pose.
     goal_rew = torch.where(hold_flag == hold_value, 1.0 * (0.9 - 2.0 * goal_dist), goal_rew)
+
     hand_up = torch.zeros_like(goal_dist)
-    # Small shaping term for lifting the object above the table (>=61 cm) while grasped.
     hand_up = torch.where(
         lowest >= 0.61, torch.where(hold_flag == hold_value, 0.1 + 0.1 * actions[:, 2], hand_up), hand_up
     )
-    # Additional lift bonus once the object is high enough (>=80 cm) plus a goal-distance shaping term.
     hand_up = torch.where(
         lowest >= 0.80,
         torch.where(
@@ -409,34 +444,54 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
         ),
         hand_up,
     )
+
     bonus = torch.zeros_like(goal_dist)
-    # Final success bonus: inversely proportional to remaining goal distance when the object is near the target.
     bonus = torch.where(
         hold_flag == hold_value,
         torch.where(goal_dist <= max_goal_dist, 1.0 / (1 + 10 * goal_dist), bonus),
         bonus,
     )
 
+    raw_init_terms: Dict[str, torch.Tensor] = {
+        "delta_init_qpos_value": delta_init_qpos_value,
+        "right_hand_dist": right_hand_pc_dist,
+        "delta_target_hand_pca": delta_target_hand_pca,
+        "right_hand_exploration_dist": right_hand_exploration_dist,
+    }
+    raw_grasp_terms: Dict[str, torch.Tensor] = {
+        "right_hand_body_dist": right_hand_body_pc_dist,
+        "right_hand_joint_dist": right_hand_joint_pc_dist,
+        "right_hand_finger_dist": right_hand_finger_pc_dist,
+        "right_hand_dist": 2.0 * right_hand_pc_dist,
+        "goal_dist": goal_dist,
+        "goal_rew": goal_rew,
+        "hand_up": hand_up,
+        "bonus": bonus,
+        "right_hand_pose": delta_qpos,
+    }
+
+    # --- Step 3: apply weights and aggregate.
     init_terms: Dict[str, torch.Tensor] = {
-        "reward/init/delta_init_qpos_value": weights.delta_init_qpos_value * delta_init_qpos_value,
-        "reward/init/right_hand_dist": weights.right_hand_dist * right_hand_pc_dist,
-        "reward/init/delta_target_hand_pca": weights.delta_target_hand_pca * delta_target_hand_pca,
-        "reward/init/right_hand_exploration_dist": weights.right_hand_exploration_dist * right_hand_exploration_dist,
+        "reward/init/delta_init_qpos_value": weights.delta_init_qpos_value * raw_init_terms["delta_init_qpos_value"],
+        "reward/init/right_hand_dist": weights.right_hand_dist * raw_init_terms["right_hand_dist"],
+        "reward/init/delta_target_hand_pca": weights.delta_target_hand_pca * raw_init_terms["delta_target_hand_pca"],
+        "reward/init/right_hand_exploration_dist": weights.right_hand_exploration_dist
+        * raw_init_terms["right_hand_exploration_dist"],
     }
     init_reward = torch.zeros_like(next(iter(init_terms.values())))
     for value in init_terms.values():
         init_reward = init_reward + value
 
     grasp_terms: Dict[str, torch.Tensor] = {
-        "reward/grasp/right_hand_body_dist": weights.right_hand_body_dist * right_hand_body_pc_dist,
-        "reward/grasp/right_hand_joint_dist": weights.right_hand_joint_dist * right_hand_joint_pc_dist,
-        "reward/grasp/right_hand_finger_dist": weights.right_hand_finger_dist * right_hand_finger_pc_dist,
-        "reward/grasp/right_hand_dist": 2.0 * weights.right_hand_dist * right_hand_pc_dist,
-        "reward/grasp/goal_dist": weights.goal_dist * goal_dist,
-        "reward/grasp/goal_rew": weights.goal_rew * goal_rew,
-        "reward/grasp/hand_up": weights.hand_up * hand_up,
-        "reward/grasp/bonus": weights.bonus * bonus,
-        "reward/grasp/right_hand_pose": weights.right_hand_pose * delta_qpos,
+        "reward/grasp/right_hand_body_dist": weights.right_hand_body_dist * raw_grasp_terms["right_hand_body_dist"],
+        "reward/grasp/right_hand_joint_dist": weights.right_hand_joint_dist * raw_grasp_terms["right_hand_joint_dist"],
+        "reward/grasp/right_hand_finger_dist": weights.right_hand_finger_dist * raw_grasp_terms["right_hand_finger_dist"],
+        "reward/grasp/right_hand_dist": weights.right_hand_dist * raw_grasp_terms["right_hand_dist"],
+        "reward/grasp/goal_dist": weights.goal_dist * raw_grasp_terms["goal_dist"],
+        "reward/grasp/goal_rew": weights.goal_rew * raw_grasp_terms["goal_rew"],
+        "reward/grasp/hand_up": weights.hand_up * raw_grasp_terms["hand_up"],
+        "reward/grasp/bonus": weights.bonus * raw_grasp_terms["bonus"],
+        "reward/grasp/right_hand_pose": weights.right_hand_pose * raw_grasp_terms["right_hand_pose"],
     }
     grasp_reward = torch.zeros_like(init_reward)
     for value in grasp_terms.values():

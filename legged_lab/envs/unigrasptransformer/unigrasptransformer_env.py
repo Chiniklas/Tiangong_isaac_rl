@@ -224,6 +224,11 @@ class UniGraspTransformerEnv(BaseEnv):
         self._palm_dir_local: torch.Tensor | None = None
         self._palm_dir_offset_local: torch.Tensor | None = None
         self._palm_dir_scale: float = 0.0
+        # Optional reward target overrides loaded from YAML
+        self._reward_target_joint_order = getattr(self.cfg.scene.spawn, "reward_joint_order", None)
+        self._reward_init_qpos = getattr(self.cfg.scene.spawn, "reward_init_qpos", None)
+        self._reward_hand_mask = getattr(self.cfg.scene.spawn, "reward_hand_mask", None)
+        self._reward_hand_pose = getattr(self.cfg.scene.spawn, "reward_hand_pose", None)
 
         self._set_object_pose()
 
