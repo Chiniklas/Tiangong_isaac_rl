@@ -322,6 +322,10 @@ class UniGraspTransformerEnv(BaseEnv):
             except Exception as exc:
                 print(f"[WARN] Failed to init reward table viewer: {exc}")
                 self._enable_reward_table = False
+        # Success/goal bookkeeping similar to reference task
+        self.successes = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+        self.current_successes = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+        self.consecutive_successes = torch.zeros(1, device=self.device, dtype=torch.float32)
 
     # (Removed) SDF buffer initialization
 
@@ -505,8 +509,6 @@ class UniGraspTransformerEnv(BaseEnv):
             labels += [f"obj_angvel_{axis}" for axis in "xyz"]
             labels += [f"goal_vec_{axis}" for axis in "xyz"]
             return labels[:length]
-        if name == "object_visual":
-            return _linear("obj_feat_", length)
         if name == "time":
             labels = ["progress"]
             labels += _linear("time_enc_", length - 1)
@@ -692,6 +694,7 @@ class UniGraspTransformerEnv(BaseEnv):
 
         finger_kin = torch.cat([tip_pos_obj, tip_quat_obj, tip_lin_vel_obj, tip_ang_vel_obj], dim=-1)
         finger_kin = finger_kin.reshape(num_envs, -1)
+        # Zero fingertip forces/torques (Isaac Sim force sensors not wired here)
         finger_ft = torch.zeros(num_envs, 30, device=device, dtype=dtype)
         hand_fingers = torch.cat([finger_kin, finger_ft], dim=-1)
 
@@ -716,7 +719,7 @@ class UniGraspTransformerEnv(BaseEnv):
             act24 = torch.cat([palm_trans, palm_rot, act24[:, 6:]], dim=-1)
         self._log_obs_block("previous_action", act24)
 
-        # Object state (16) – match Table 1 definition (center, quat, velocities, goal delta)
+        # Object state (16) – object pose (world), velocities (object frame), goal delta (object frame)
         goal_height = self._default_table_surface + 0.20
         goal_pos = torch.tensor(self._default_object_pos, device=device, dtype=dtype).unsqueeze(0).repeat(num_envs, 1)
         goal_pos[:, 2] = goal_height
@@ -725,8 +728,8 @@ class UniGraspTransformerEnv(BaseEnv):
         obj_ang_vel_obj = quat_apply(obj_conj, obj_ang_vel)
         object_state = torch.cat(
             [
-                torch.zeros(num_envs, 3, device=device, dtype=dtype),
-                torch.tensor([0.0, 0.0, 0.0, 1.0], device=device, dtype=dtype).expand(num_envs, 4),
+                obj_pos,
+                obj_rot,
                 obj_lin_vel_obj,
                 obj_ang_vel_obj,
                 goal_vec_obj,
@@ -735,7 +738,7 @@ class UniGraspTransformerEnv(BaseEnv):
         )
         self._log_obs_block("object_state", object_state)
 
-        # Object visual (128) – use dataset embedding if available, else zeros
+        # Object visual removed for dedicated policy alignment
         object_points_world = None
         if self._object_pc_local is not None:
             pc_local = self._object_pc_local.to(device, dtype)
@@ -746,16 +749,6 @@ class UniGraspTransformerEnv(BaseEnv):
             points_flat = pc_local.reshape(-1, 3)
             rotated = quat_apply(quat_expanded, points_flat).reshape(num_envs, num_points, 3)
             object_points_world = rotated + obj_pos.unsqueeze(1)
-            object_centers = torch.mean(object_points_world, dim=1)
-            centered = object_points_world - object_centers.unsqueeze(1)
-            max_points = min(centered.shape[1], 64)
-            flat = centered[:, :max_points].reshape(num_envs, -1)
-            object_visual = torch.zeros(num_envs, 128, device=device, dtype=dtype)
-            take = min(object_visual.shape[1], flat.shape[1])
-            object_visual[:, :take] = flat[:, :take]
-        else:
-            object_visual = torch.zeros(num_envs, 128, device=device, dtype=dtype)
-        self._log_obs_block("object_visual", object_visual)
 
         # Times (29) – normalized progress + positional encoding
         progress_steps = self.episode_length_buf.to(device=device, dtype=torch.float32)
@@ -763,19 +756,13 @@ class UniGraspTransformerEnv(BaseEnv):
         times = torch.cat([progress_steps.unsqueeze(-1).to(dtype), time_encoding], dim=-1)
         self._log_obs_block("time", times)
 
-        # Hand-object distances (36) – min distances from canonical hand points to object cloud
-        if object_points_world is not None:
-            hand_points = self._compute_hand_surface_points()
-            dists = torch.cdist(hand_points, object_points_world).min(dim=-1).values
-            hand_object_features = dists
-        else:
-            hand_object_features = torch.zeros(num_envs, 36, device=device, dtype=dtype)
+        # Hand-object distances (36) – min distances from canonical hand points to object cloud (assumes PC present)
+        hand_points = self._compute_hand_surface_points()
+        dists = torch.cdist(hand_points, object_points_world).min(dim=-1).values
+        hand_object_features = dists
         self._log_obs_block("hand_object_distance", hand_object_features)
 
-        actor_obs = torch.cat(
-            [proprioception, act24, object_state, hand_object_features, times, object_visual],
-            dim=-1,
-        )
+        actor_obs = torch.cat([proprioception, act24, object_state, hand_object_features, times], dim=-1)
         critic_obs = actor_obs
         return actor_obs, critic_obs
 
@@ -867,6 +854,27 @@ class UniGraspTransformerEnv(BaseEnv):
         self.extras["log"].update(reward_logs)
         extras = self.extras
         extras["observations"]["critic"] = actor_obs
+        # Success/goal bookkeeping: flag success when hold_flag==2 and goal_dist within tolerance.
+        try:
+            hold_flag = reward_logs.get("reward/hold_flag")
+            goal_dist = reward_logs.get("debug/goal_dist")
+            if hold_flag is not None and goal_dist is not None:
+                hold = torch.as_tensor(hold_flag, device=self.device)
+                gd = torch.as_tensor(goal_dist, device=self.device)
+                success_mask = (hold == 2).to(torch.bool) & (gd <= getattr(self._reward_weights, "max_goal_dist", 0.05))
+                self.successes = success_mask.float()
+                self.current_successes = torch.where(self.reset_buf > 0, torch.zeros_like(self.successes), self.successes)
+                self.consecutive_successes = torch.where(
+                    self.reset_buf.sum() > 0,
+                    torch.zeros_like(self.consecutive_successes),
+                    self.consecutive_successes + self.successes.sum()
+                )
+                extras.setdefault("info", {})
+                extras["info"]["successes"] = self.successes.detach().cpu()
+                extras["info"]["current_successes"] = self.current_successes.detach().cpu()
+                extras["info"]["consecutive_successes"] = self.consecutive_successes.detach().cpu()
+        except Exception:
+            pass
         self._update_reward_table(reward_logs)
         self._update_palm_dir_overlay()
 
