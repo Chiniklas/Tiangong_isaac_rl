@@ -11,9 +11,11 @@
 # Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
 # All rights reserved.
 # Modifications are licensed under the BSD-3-Clause license.
+#
 # This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
+
 from legged_lab.envs.base.base_env import BaseEnv
 from legged_lab.envs.base.base_env_config import BaseAgentCfg, BaseEnvCfg
 from legged_lab.envs.tienkung.run_cfg import TienKungRunAgentCfg, TienKungRunFlatEnvCfg
@@ -30,6 +32,11 @@ from legged_lab.envs.tienkung.walk_with_sensor_cfg import (
     TienKungWalkWithSensorAgentCfg,
     TienKungWalkWithSensorFlatEnvCfg,
 )
+from legged_lab.envs.unigrasptransformer.dex_grasp_cfg import (
+    UnigraspTransformerAgentCfg,
+    UnigraspTransformerGraspEnv,
+)
+from legged_lab.envs.unigrasptransformer.unigrasptransformer_env import UniGraspTransformerEnv
 from legged_lab.utils.task_registry import task_registry
 
 task_registry.register("walk", TienKungEnv, TienKungWalkFlatEnvCfg(), TienKungWalkAgentCfg())
@@ -40,17 +47,10 @@ task_registry.register(
 task_registry.register(
     "run_with_sensor", TienKungEnv, TienKungRunWithSensorFlatEnvCfg(), TienKungRunWithSensorAgentCfg()
 )
-
-
-from legged_lab.envs.unigrasptransformer import (
-    UniGraspTransformerEnv,
-    UniGraspTransformerEnvCfg,
-    UniGraspTransformerAgentCfg,
-)
-
+# UniGraspTransformer grasp task (uses hand-only env)
 task_registry.register(
-    "unigrasptransformer",
+    "unigrasptransformer_grasp",
     UniGraspTransformerEnv,
-    UniGraspTransformerEnvCfg(),
-    UniGraspTransformerAgentCfg(),
+    UnigraspTransformerGraspEnv(),
+    UnigraspTransformerAgentCfg(),
 )

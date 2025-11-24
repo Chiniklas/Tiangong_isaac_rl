@@ -18,7 +18,6 @@
 
 import argparse
 import os
-from pathlib import Path
 
 import torch
 from isaaclab.app import AppLauncher
@@ -85,19 +84,7 @@ def play():
         env_cfg.scene.num_envs = args_cli.num_envs
 
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
-    if env_class_name == "unigrasptransformer":
-        from legged_lab.envs.unigrasptransformer.train_config import apply_agent_overrides_from_ppo_config
-
-        ppo_cfg_path = Path(
-            getattr(env_cfg, "ppo_config_path", Path("legged_lab/envs/unigrasptransformer/cfg/ppo_config.yaml"))
-        )
-        apply_agent_overrides_from_ppo_config(agent_cfg, ppo_cfg_path)
     env_cfg.scene.seed = agent_cfg.seed
-    if env_class_name == "unigrasptransformer":
-        from legged_lab.envs.unigrasptransformer.train_config import apply_agent_overrides_from_ppo_config
-
-        ppo_cfg_path = Path(getattr(env_cfg, "ppo_config_path", "legged_lab/envs/unigrasptransformer/cfg/ppo_config.yaml"))
-        apply_agent_overrides_from_ppo_config(agent_cfg, ppo_cfg_path)
 
     env_class = task_registry.get_task_class(env_class_name)
     env = env_class(env_cfg, args_cli.headless)

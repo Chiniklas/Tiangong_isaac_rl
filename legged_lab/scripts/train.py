@@ -46,7 +46,6 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 import os
 from datetime import datetime
-from pathlib import Path
 
 import torch
 from isaaclab.utils.io import dump_yaml
@@ -72,13 +71,6 @@ def train():
         env_cfg.scene.num_envs = args_cli.num_envs
 
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
-    if args_cli.task == "unigrasptransformer":
-        from legged_lab.envs.unigrasptransformer.train_config import apply_agent_overrides_from_ppo_config
-
-        ppo_cfg_path = Path(
-            getattr(env_cfg, "ppo_config_path", Path("legged_lab/envs/unigrasptransformer/ppo_config.yaml"))
-        )
-        apply_agent_overrides_from_ppo_config(agent_cfg, ppo_cfg_path)
     env_cfg.scene.seed = agent_cfg.seed
 
     if args_cli.distributed:
@@ -112,9 +104,6 @@ def train():
 
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-
-    if (not args_cli.distributed) or (app_launcher.local_rank == 0):
-        input("\n[INFO] Scene ready. Press Enter to start training... ")
 
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
 

@@ -229,7 +229,13 @@ For programmatic keyboard bindings inside environments, see `legged_lab/utils/ke
 
 
 ## Project TODOs
+assets related:
 - Replicate the ShadowHand tendon mimic constraints from the original MJCF (fixed tendons coupling distal/proximal joints) in the USD/controller to match UniGraspTransformer hand behavior.
+
+reward related:
 - Port the reference UniGraspTransformer reset/randomization logic: object/goal pose sampling with noise, hand pose noise, and domain randomization knobs.
 - Align goal/success bookkeeping and reset conditions with the reference state_based_grasp task.
 - Address Isaac Sim contact sensing gaps: add robust per-fingertip 6D force/torque sensing (PhysX contact or force sensors) instead of zeroed fingertip force inputs.
+
+pipeline related:
+the spawning pipeline is always off, I need to fix it.

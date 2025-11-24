@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--ugtf-root",
         type=Path,
-        default=Path("/home/chizhang/Tiangong_isaac_rl/dataset/unigrasptransformer_asset/meshdatav3_scaled"),
+        default=Path("dataset/unigrasptransformer_asset/meshdatav3_scaled"),
         help="UGTF mesh root (used to locate <subset-name> if --usd-output is not set)",
     )
     p.add_argument("--subset-name", type=str, default="subset_core10", help="Subset folder name under --ugtf-root")

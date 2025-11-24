@@ -1,20 +1,8 @@
-# Copyright (c) 2021-2024, The RSL-RL Project Developers.
-# All rights reserved.
-# Original code is licensed under the BSD-3-Clause license.
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The Legged Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
-# All rights reserved.
-# Modifications are licensed under the BSD-3-Clause license.
-#
-# This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
-# with additional modifications by the TienKung-Lab Project,
-# and is distributed under the BSD-3-Clause license.
+# UniGraspTransformer hand environment (simplified from TienKungEnv):
+# - Shadow Hand as the default robot, no AMP pipeline, no terrain curriculum.
+# - Hand-only body IDs (fingertips); limb IDs left empty as placeholders.
+# - Observation pipeline currently stubbed; fill task-specific obs as needed.
+# - Retains base sim/scene/buffer/step structure for compatibility with RL runners.
 
 import isaaclab.sim as sim_utils
 import isaacsim.core.utils.torch as torch_utils  # type: ignore
@@ -34,15 +22,9 @@ from isaaclab.utils.buffers import CircularBuffer, DelayBuffer
 from isaaclab.utils.math import quat_apply, quat_conjugate, quat_rotate
 from scipy.spatial.transform import Rotation
 
-from legged_lab.envs.tienkung.run_cfg import TienKungRunFlatEnvCfg
-from legged_lab.envs.tienkung.run_with_sensor_cfg import TienKungRunWithSensorFlatEnvCfg
-from legged_lab.envs.tienkung.walk_cfg import TienKungWalkFlatEnvCfg
-from legged_lab.envs.tienkung.walk_with_sensor_cfg import (
-    TienKungWalkWithSensorFlatEnvCfg,
-)
-from legged_lab.utils.env_utils.scene import SceneCfg
+from legged_lab.envs.unigrasptransformer.dex_grasp_cfg import UnigraspTransformerGraspEnv
+from legged_lab.utils.env_utils.unigrasptransformer_scene import UniGraspSceneCfg
 from rsl_rl.env import VecEnv
-from rsl_rl.utils import AMPLoaderDisplay
 
 # Load YAML configs at import so hyperparameters are available module-wide.
 def _load_yaml_cfg(filename: str) -> Dict[str, Any]:
@@ -71,22 +53,10 @@ PPO_CFG = _load_yaml_cfg("ppo_cfg.yaml")
 class UniGraspTransformerEnv(VecEnv):
     def __init__(
         self,
-        cfg: (
-            TienKungRunFlatEnvCfg
-            | TienKungWalkFlatEnvCfg
-            | TienKungWalkWithSensorFlatEnvCfg
-            | TienKungRunWithSensorFlatEnvCfg
-        ),
+        cfg: UnigraspTransformerGraspEnv,
         headless,
     ):
-        self.cfg: (
-            TienKungRunFlatEnvCfg
-            | TienKungWalkFlatEnvCfg
-            | TienKungWalkWithSensorFlatEnvCfg
-            | TienKungRunWithSensorFlatEnvCfg
-        )
-
-        self.cfg = cfg
+        self.cfg: UnigraspTransformerGraspEnv = cfg
         self.headless = headless
         self.device = self.cfg.device
         self.physics_dt = self.cfg.sim.dt
@@ -108,21 +78,12 @@ class UniGraspTransformerEnv(VecEnv):
         )
         self.sim = SimulationContext(sim_cfg)
 
-        scene_cfg = SceneCfg(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
+        scene_cfg = UniGraspSceneCfg(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
         self.scene = InteractiveScene(scene_cfg)
         self.sim.reset()
 
         self.robot: Articulation = self.scene["robot"]
         self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
-
-        if self.cfg.scene.height_scanner.enable_height_scan:
-            self.height_scanner: RayCaster = self.scene.sensors["height_scanner"]
-
-        # Instantiate LiDAR and Depth Camera Sensors if enabled
-        if self.cfg.scene.lidar.enable_lidar:
-            self.lidar: RayCaster = self.scene.sensors["lidar"]
-        if self.cfg.scene.depth_camera.enable_depth_camera:
-            self.depth_camera: TiledCamera = self.scene.sensors["depth_camera"]
 
         command_cfg = UniformVelocityCommandCfg(
             asset_name="robot",
@@ -144,11 +105,8 @@ class UniGraspTransformerEnv(VecEnv):
         if "startup" in self.event_manager.available_modes:
             self.event_manager.apply(mode="startup")
         self.reset(env_ids)
-
-        self.amp_loader_display = AMPLoaderDisplay(
-            motion_files=self.cfg.amp_motion_files_display, device=self.device, time_between_frames=self.physics_dt
-        )
-        self.motion_len = self.amp_loader_display.trajectory_num_frames[0]
+        # AMP loader not used for grasping; no motion visualization needed.
+        self.motion_len = 0
 
     def init_buffers(self):
         self.extras = {}
@@ -185,57 +143,11 @@ class UniGraspTransformerEnv(VecEnv):
         self.feet_cfg = SceneEntityCfg(name="contact_sensor", body_names=self.cfg.robot.feet_body_names)
         self.feet_cfg.resolve(self.scene)
 
-        self.feet_body_ids, _ = self.robot.find_bodies(
-            name_keys=["ankle_roll_l_link", "ankle_roll_r_link"], preserve_order=True
+        self.fingertip_ids, _ = self.robot.find_bodies(
+            name_keys=["ffdistal", "mfdistal", "rfdistal", "lfdistal", "thdistal"], preserve_order=True
         )
-        self.elbow_body_ids, _ = self.robot.find_bodies(
-            name_keys=["elbow_pitch_l_link", "elbow_pitch_r_link"], preserve_order=True
-        )
-        self.left_leg_ids, _ = self.robot.find_joints(
-            name_keys=[
-                "hip_roll_l_joint",
-                "hip_pitch_l_joint",
-                "hip_yaw_l_joint",
-                "knee_pitch_l_joint",
-                "ankle_pitch_l_joint",
-                "ankle_roll_l_joint",
-            ],
-            preserve_order=True,
-        )
-        self.right_leg_ids, _ = self.robot.find_joints(
-            name_keys=[
-                "hip_roll_r_joint",
-                "hip_pitch_r_joint",
-                "hip_yaw_r_joint",
-                "knee_pitch_r_joint",
-                "ankle_pitch_r_joint",
-                "ankle_roll_r_joint",
-            ],
-            preserve_order=True,
-        )
-        self.left_arm_ids, _ = self.robot.find_joints(
-            name_keys=[
-                "shoulder_pitch_l_joint",
-                "shoulder_roll_l_joint",
-                "shoulder_yaw_l_joint",
-                "elbow_pitch_l_joint",
-            ],
-            preserve_order=True,
-        )
-        self.right_arm_ids, _ = self.robot.find_joints(
-            name_keys=[
-                "shoulder_pitch_r_joint",
-                "shoulder_roll_r_joint",
-                "shoulder_yaw_r_joint",
-                "elbow_pitch_r_joint",
-            ],
-            preserve_order=True,
-        )
-        self.ankle_joint_ids, _ = self.robot.find_joints(
-            name_keys=["ankle_pitch_l_joint", "ankle_pitch_r_joint", "ankle_roll_l_joint", "ankle_roll_r_joint"],
-            preserve_order=True,
-        )
-
+        
+        # obstacles
         self.obs_scales = self.cfg.normalization.obs_scales
         self.add_noise = self.cfg.noise.add_noise
 
@@ -243,64 +155,18 @@ class UniGraspTransformerEnv(VecEnv):
         self.sim_step_counter = 0
         self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
-        self.left_arm_local_vec = torch.tensor([0.0, 0.0, -0.3], device=self.device).repeat((self.num_envs, 1))
-        self.right_arm_local_vec = torch.tensor([0.0, 0.0, -0.3], device=self.device).repeat((self.num_envs, 1))
-
-        # Init gait parameter
-        self.gait_phase = torch.zeros(self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False)
-        self.gait_cycle = torch.full(
-            (self.num_envs,), self.cfg.gait.gait_cycle, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        self.phase_ratio = torch.tensor(
-            [self.cfg.gait.gait_air_ratio_l, self.cfg.gait.gait_air_ratio_r], dtype=torch.float, device=self.device
-        ).repeat(self.num_envs, 1)
-        self.phase_offset = torch.tensor(
-            [self.cfg.gait.gait_phase_offset_l, self.cfg.gait.gait_phase_offset_r],
-            dtype=torch.float,
-            device=self.device,
-        ).repeat(self.num_envs, 1)
+        # action buffer    
         self.action = torch.zeros(
             self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        self.avg_feet_force_per_step = torch.zeros(
-            self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
-        )
-        self.avg_feet_speed_per_step = torch.zeros(
-            self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
         )
         self.init_obs_buffer()
 
     
 
     def compute_current_observations(self):
-        robot = self.robot
-        net_contact_forces = self.contact_sensor.data.net_forces_w_history
-
-        ang_vel = robot.data.root_ang_vel_b
-        projected_gravity = robot.data.projected_gravity_b
-        command = self.command_generator.command
-        joint_pos = robot.data.joint_pos - robot.data.default_joint_pos
-        joint_vel = robot.data.joint_vel - robot.data.default_joint_vel
-        action = self.action_buffer._circular_buffer.buffer[:, -1, :]
-        root_lin_vel = robot.data.root_lin_vel_b
-        feet_contact = torch.max(torch.norm(net_contact_forces[:, :, self.feet_cfg.body_ids], dim=-1), dim=1)[0] > 0.5
-
-        current_actor_obs = torch.cat(
-            [
-                ang_vel * self.obs_scales.ang_vel,  # 3
-                projected_gravity * self.obs_scales.projected_gravity,  # 3
-                command * self.obs_scales.commands,  # 3
-                joint_pos * self.obs_scales.joint_pos,  # 20
-                joint_vel * self.obs_scales.joint_vel,  # 20
-                action * self.obs_scales.actions,  # 20
-                torch.sin(2 * torch.pi * self.gait_phase),  # 2
-                torch.cos(2 * torch.pi * self.gait_phase),  # 2
-                self.phase_ratio,  # 2
-            ],
-            dim=-1,
-        )
-        current_critic_obs = torch.cat([current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact], dim=-1)
-
+        # TODO: replace with task-specific observations for the hand.
+        current_actor_obs = torch.zeros((self.num_envs, 1), device=self.device)
+        current_critic_obs = current_actor_obs
         return current_actor_obs, current_critic_obs
 
     def compute_observations(self):
@@ -376,17 +242,17 @@ class UniGraspTransformerEnv(VecEnv):
         self.sim.forward()
 
     def step(self, actions: torch.Tensor):
-        delayed_actions = self.action_buffer.compute(actions)
+        # action process
+        if self.cfg.domain_rand.action_delay.enable:
+            delayed_actions = self.action_buffer.compute(actions)
+        else:
+            delayed_actions = actions
         self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
 
         processed_actions = self.action * self.action_scale + self.robot.data.default_joint_pos
 
-        self.avg_feet_force_per_step = torch.zeros(
-            self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
-        )
-        self.avg_feet_speed_per_step = torch.zeros(
-            self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
-        )
+        # Apply one action over multiple physics substeps (higher-rate physics than control)
+        # and accumulate fingertip contact forces/speeds for averaging.
         for _ in range(self.cfg.sim.decimation):
             self.sim_step_counter += 1
             self.robot.set_joint_position_target(processed_actions)
@@ -474,70 +340,14 @@ class UniGraspTransformerEnv(VecEnv):
             max_len=self.cfg.robot.critic_obs_history_length, batch_size=self.num_envs, device=self.device
         )
 
-    def update_terrain_levels(self, env_ids):
-        distance = torch.norm(self.robot.data.root_pos_w[env_ids, :2] - self.scene.env_origins[env_ids, :2], dim=1)
-        move_up = distance > self.scene.terrain.cfg.terrain_generator.size[0] / 2
-        move_down = (
-            distance < torch.norm(self.command_generator.command[env_ids, :2], dim=1) * self.max_episode_length_s * 0.5
-        )
-        move_down *= ~move_up
-        self.scene.terrain.update_env_origins(env_ids, move_up, move_down)
-        extras = {}
-        extras["Curriculum/terrain_levels"] = torch.mean(self.scene.terrain.terrain_levels.float())
-        return extras
-
     def get_observations(self):
         actor_obs, critic_obs = self.compute_observations()
         self.extras["observations"] = {"critic": critic_obs}
         return actor_obs, self.extras
 
     def get_amp_obs_for_expert_trans(self):
-        """Gets amp obs from policy"""
-        left_hand_pos = (
-            self.robot.data.body_state_w[:, self.elbow_body_ids[0], :3]
-            - self.robot.data.root_state_w[:, 0:3]
-            + quat_rotate(self.robot.data.body_state_w[:, self.elbow_body_ids[0], 3:7], self.left_arm_local_vec)
-        )
-        right_hand_pos = (
-            self.robot.data.body_state_w[:, self.elbow_body_ids[1], :3]
-            - self.robot.data.root_state_w[:, 0:3]
-            + quat_rotate(self.robot.data.body_state_w[:, self.elbow_body_ids[1], 3:7], self.right_arm_local_vec)
-        )
-        left_hand_pos = quat_apply(quat_conjugate(self.robot.data.root_state_w[:, 3:7]), left_hand_pos)
-        right_hand_pos = quat_apply(quat_conjugate(self.robot.data.root_state_w[:, 3:7]), right_hand_pos)
-        left_foot_pos = (
-            self.robot.data.body_state_w[:, self.feet_body_ids[0], :3] - self.robot.data.root_state_w[:, 0:3]
-        )
-        right_foot_pos = (
-            self.robot.data.body_state_w[:, self.feet_body_ids[1], :3] - self.robot.data.root_state_w[:, 0:3]
-        )
-        left_foot_pos = quat_apply(quat_conjugate(self.robot.data.root_state_w[:, 3:7]), left_foot_pos)
-        right_foot_pos = quat_apply(quat_conjugate(self.robot.data.root_state_w[:, 3:7]), right_foot_pos)
-        self.left_leg_dof_pos = self.robot.data.joint_pos[:, self.left_leg_ids]
-        self.right_leg_dof_pos = self.robot.data.joint_pos[:, self.right_leg_ids]
-        self.left_leg_dof_vel = self.robot.data.joint_vel[:, self.left_leg_ids]
-        self.right_leg_dof_vel = self.robot.data.joint_vel[:, self.right_leg_ids]
-        self.left_arm_dof_pos = self.robot.data.joint_pos[:, self.left_arm_ids]
-        self.right_arm_dof_pos = self.robot.data.joint_pos[:, self.right_arm_ids]
-        self.left_arm_dof_vel = self.robot.data.joint_vel[:, self.left_arm_ids]
-        self.right_arm_dof_vel = self.robot.data.joint_vel[:, self.right_arm_ids]
-        return torch.cat(
-            (
-                self.right_arm_dof_pos,
-                self.left_arm_dof_pos,
-                self.right_leg_dof_pos,
-                self.left_leg_dof_pos,
-                self.right_arm_dof_vel,
-                self.left_arm_dof_vel,
-                self.right_leg_dof_vel,
-                self.left_leg_dof_vel,
-                left_hand_pos,
-                right_hand_pos,
-                left_foot_pos,
-                right_foot_pos,
-            ),
-            dim=-1,
-        )
+        # AMP workflow removed for grasping; no expert obs provided.
+        raise NotImplementedError("AMP observations are not used in UniGraspTransformerEnv")
 
     @staticmethod
     def seed(seed: int = -1) -> int:
@@ -548,11 +358,3 @@ class UniGraspTransformerEnv(VecEnv):
         except ModuleNotFoundError:
             pass
         return torch_utils.set_seed(seed)
-
-    def _calculate_gait_para(self) -> None:
-        """
-        Update gait phase parameters based on simulation time and offset.
-        """
-        t = self.episode_length_buf * self.step_dt / self.gait_cycle
-        self.gait_phase[:, 0] = (t + self.phase_offset[:, 0]) % 1.0
-        self.gait_phase[:, 1] = (t + self.phase_offset[:, 1]) % 1.0

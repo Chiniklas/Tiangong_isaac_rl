@@ -9,9 +9,13 @@ SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." >/dev/null 2>&1 && pwd)"
 
 echo "[UGTF] Converting selected meshes to USD..."
-python "${SCRIPT_DIR}/convert_unigrasptransformer_dataset_to_usd.py" "$@"
+python "${SCRIPT_DIR}/convert_unigrasptransformer_dataset_to_usd.py" \
+  --ugtf-root "${REPO_ROOT}/dataset/unigrasptransformer_asset/meshdatav3_scaled" \
+  "$@"
 
 echo "[UGTF] Generating FPS point clouds, PCA axes, and initial poses..."
-python "${SCRIPT_DIR}/generate_fps_pca_init.py" "$@"
+python "${SCRIPT_DIR}/generate_fps_pca_init.py" \
+  --ugtf-root "${REPO_ROOT}/dataset/unigrasptransformer_asset/meshdatav3_scaled" \
+  "$@"
 
 echo "[UGTF] Pipeline complete."

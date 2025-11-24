@@ -16,17 +16,7 @@
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
 
-"""Keyboard controller for simple in-sim actions.
-
-Usage
-- Construct with an initialized `BaseEnv`: `kb = Keyboard(env)`.
-- Default binding: press `R` to mark all envs for reset (sets `episode_length_buf` large so the env's reset path triggers).
-- Add custom keys: `keyboard.add_callback("F", lambda env: print("F pressed"))`.
-  - Callback signature should be `func(env) -> None` (the environment is passed in). If your function takes no arguments, it will be called without parameters.
-
-Notes
-- This utility depends on Omniverse input APIs (carb/omni). It is a lightweight alternative to the preview‑script controller in `legged_lab/scripts/tools/keyboard_controller.py` (which maps 1–6 to XYZ translation for demos).
-"""
+"""Keyboard controller for SE(2) control."""
 
 import weakref
 from collections.abc import Callable
@@ -75,15 +65,7 @@ class Keyboard(DeviceBase):
         pass
 
     def add_callback(self, key: str, func: Callable):
-        """Register a callback for a given key name.
-
-        - `key`: single character or Omniverse key name (e.g. "R", "F").
-        - `func`: callable invoked on key press. Preferred signature: `(env) -> None`.
-        """
-        if not isinstance(key, str) or not key:
-            raise ValueError("key must be a non-empty string")
-        # Normalize to upper-case Omniverse names for consistency with `event.input.name`.
-        self._additional_callbacks[key.upper()] = func
+        pass
 
     def advance(self):
         pass
@@ -100,20 +82,9 @@ class Keyboard(DeviceBase):
         """
         # apply the command when pressed
         if event.type == carb.input.KeyboardEventType.KEY_PRESS:
-            key_name = getattr(event.input, "name", None)
-            if key_name is None:
-                return True
-            # default mappings
-            if key_name in self._INPUT_KEY_MAPPING:
-                if key_name == "R":
+            if event.input.name in self._INPUT_KEY_MAPPING:
+                if event.input.name == "R":
                     self.env.episode_length_buf = torch.ones_like(self.env.episode_length_buf) * 1e6
-            # user callbacks
-            cb = self._additional_callbacks.get(key_name)
-            if cb is not None:
-                try:
-                    cb(self.env)
-                except TypeError:
-                    cb()
 
         # since no error, we are fine :)
         return True
