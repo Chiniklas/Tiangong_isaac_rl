@@ -72,13 +72,6 @@ def train():
         env_cfg.scene.num_envs = args_cli.num_envs
 
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
-    if args_cli.task == "unigrasptransformer":
-        from legged_lab.envs.unigrasptransformer.train_config import apply_agent_overrides_from_ppo_config
-
-        ppo_cfg_path = Path(
-            getattr(env_cfg, "ppo_config_path", Path("legged_lab/envs/unigrasptransformer/ppo_config.yaml"))
-        )
-        apply_agent_overrides_from_ppo_config(agent_cfg, ppo_cfg_path)
     env_cfg.scene.seed = agent_cfg.seed
 
     if args_cli.distributed:
