@@ -51,8 +51,6 @@ def apply_agent_overrides_from_ppo_config(agent_cfg, path: Path | None = None) -
             policy.critic_hidden_dims = list(policy_cfg["vf_hid_sizes"])
         if "activation" in policy_cfg:
             policy.activation = policy_cfg["activation"]
-        if "init_noise_std" in policy_cfg:
-            policy.init_noise_std = policy_cfg["init_noise_std"]
 
     learn_cfg: Mapping[str, Any] = data.get("learn", {})
     if learn_cfg:

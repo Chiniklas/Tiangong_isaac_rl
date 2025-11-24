@@ -27,4 +27,3 @@ learn:
   desired_kl: 0.016
   gamma: 0.96
   lam: 0.95
-

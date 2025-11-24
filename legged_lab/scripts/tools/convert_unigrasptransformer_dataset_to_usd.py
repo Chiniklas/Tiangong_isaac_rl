@@ -131,7 +131,8 @@ def _convert_obj_to_usd(mesh_path: Path, out_dir: Path, force: bool) -> Path:
         usd_dir=out_dir.as_posix(),
         usd_file_name=usd_name,
         make_instanceable=False,
-        collision_props=schemas_cfg.CollisionPropertiesCfg(),
+        # Use convex hull approximation to ensure dynamic-safe collision on the final rigid body.
+        collision_props=schemas_cfg.CollisionPropertiesCfg(approximation="convexHull"),
         rigid_props=None,
         mass_props=None,
         force_usd_conversion=force,
