@@ -6,6 +6,24 @@ from typing import Dict, Tuple
 import torch
 from isaaclab.utils.math import quat_apply, quat_conjugate, quat_mul
 
+# Paper (Eq. 1): R = Rd + (1 - fc) * Ro + fc * (Rl + Rg + Rs)
+#   Rd = distance between hand points and object point cloud (Chamfer)
+#   Ro = hand-opening term before contact; fc = contact flag (1 if distance < threshold)
+#   Rl = lift; Rg = goal distance; Rs = success bonus
+#
+# Reference code (dedicated_policy.yaml/state_based_grasp.py):
+#   hold_flag := 1{finger_dist <= max_finger_dist} + 1{hand_dist <= max_hand_dist}
+#   init_reward = w_delta_init_qpos_value * ||q - q_init|| + w_right_hand_dist * hand_dist
+#                 + w_delta_target_hand_pca * delta_target_hand_pca
+#                 + w_right_hand_exploration_dist * exploration_dist
+#   grasp_reward = w_right_hand_body_dist * body_dist + w_right_hand_joint_dist * joint_dist
+#                  + w_right_hand_finger_dist * finger_dist + 2 * w_right_hand_dist * hand_dist
+#                  + w_goal_dist * goal_dist + w_goal_rew * goal_rew
+#                  + w_hand_up * hand_up + w_bonus * bonus + w_right_hand_pose * delta_qpos
+#   (in dedicated_policy.yaml, w_right_hand_exploration_dist = 0, w_right_hand_joint_dist = 0,
+#    w_delta_target_hand_pca = 0)
+#   reward = init_reward if hold_flag != 2 else grasp_reward
+
 
 @dataclass
 class RewardWeights:
@@ -396,7 +414,7 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
         except Exception:
             pass
         env._printed_reward_qpos_debug = True
-    # Distance from each joint to the reference "home" configuration; encourages reset posture.
+    # Distance from each joint to the reference "home" configuration; mirrors the paper's Ro (pre-contact opening pose).
     delta_init_qpos_value = torch.linalg.norm(joint_pos - target_init.unsqueeze(0), dim=1)
 
     # Deviation from the desired finger curling pose (masking out unconstrained joints).
@@ -501,18 +519,20 @@ def compute_hand_reward(env, weights: RewardWeights | None = None) -> Tuple[torc
     reward -= weights.action_penalty * action_penalty
 
     logs: Dict[str, torch.Tensor] = {
+        # Phase totals and overall
+        "reward/total": reward.detach().cpu(),
         "reward/init": init_reward.detach().cpu(),
         "reward/init/total": init_reward.detach().cpu(),
         "reward/grasp": grasp_reward.detach().cpu(),
         "reward/grasp/total": grasp_reward.detach().cpu(),
+        # Per-term logs
+        **{key: value.detach().cpu() for key, value in init_terms.items()},
+        **{key: value.detach().cpu() for key, value in grasp_terms.items()},
+        # Global flags/penalties
+        "reward/action_penalty": action_penalty.detach().cpu(),
+        "reward/hold_flag": hold_flag.detach().cpu(),
+        "debug/goal_dist": goal_dist.detach().cpu(),
     }
-    for key, value in init_terms.items():
-        logs[key] = value.detach().cpu()
-    for key, value in grasp_terms.items():
-        logs[key] = value.detach().cpu()
-    logs["reward/action_penalty"] = action_penalty.detach().cpu()
-    logs["debug/hold_flag"] = hold_flag.detach().cpu()
-    logs["debug/goal_dist"] = goal_dist.detach().cpu()
 
     return reward, logs
 

@@ -11,7 +11,6 @@
 # Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
 # All rights reserved.
 # Modifications are licensed under the BSD-3-Clause license.
-#
 # This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
@@ -42,16 +41,6 @@ task_registry.register(
     "run_with_sensor", TienKungEnv, TienKungRunWithSensorFlatEnvCfg(), TienKungRunWithSensorAgentCfg()
 )
 
-
-from legged_lab.envs.graspxl_rl.graspxl_env import GraspXLEnv
-from legged_lab.envs.graspxl_rl.graspxl_cfg import GraspXLEnvCfg, GraspXLAgentCfg
-
-task_registry.register(
-    "graspxl_rl",
-    GraspXLEnv,
-    GraspXLEnvCfg(),
-    GraspXLAgentCfg(),
-)
 
 from legged_lab.envs.unigrasptransformer import (
     UniGraspTransformerEnv,

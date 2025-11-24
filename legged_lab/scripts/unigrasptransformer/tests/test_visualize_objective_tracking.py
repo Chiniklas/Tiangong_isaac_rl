@@ -99,6 +99,9 @@ def _format_reward_log(step_idx: int, logs) -> list[str]:
     action_penalty = _get("reward/action_penalty")
     if action_penalty is not None:
         base_parts.append(f"action_penalty={action_penalty:+.3f}")
+    hold_flag = _get("reward/hold_flag")
+    if hold_flag is not None:
+        base_parts.append(f"hold_flag={hold_flag:+.3f}")
     base_line = " ".join(base_parts)
 
     phase_summary: dict[str, float] = {}
@@ -110,7 +113,7 @@ def _format_reward_log(step_idx: int, logs) -> list[str]:
         parts = key.split("/")
         if len(parts) == 2:
             phase = parts[1]
-            if phase in {"total", "action_penalty"}:
+            if phase in {"total", "action_penalty", "hold_flag"}:
                 continue
             scalar = _tensor_scalar(value)
             if scalar is not None:
@@ -123,9 +126,27 @@ def _format_reward_log(step_idx: int, logs) -> list[str]:
                 phase_terms[phase].append((term, scalar))
 
     lines = [base_line]
-    for phase in sorted(phase_summary.keys()):
-        lines.append(f"  {phase}: {phase_summary[phase]:+.3f}")
-        for term, scalar in sorted(phase_terms.get(phase, []), key=lambda item: item[0]):
+    # Prefer printing grasp before init, then any others alphabetically.
+    preferred_order = ["grasp", "init"]
+    remaining = [p for p in sorted(phase_summary.keys()) if p not in preferred_order]
+    for phase in preferred_order + remaining:
+        if phase not in phase_summary and phase not in phase_terms:
+            continue
+        summary_val = phase_summary.get(phase)
+        # If no explicit summary, try to infer from a 'total' term.
+        if summary_val is None:
+            for term, scalar in phase_terms.get(phase, []):
+                if term == "total":
+                    summary_val = scalar
+                    break
+        if summary_val is not None:
+            lines.append(f"  {phase}: {summary_val:+.3f}")
+        terms = phase_terms.get(phase, [])
+        # Move 'total' to the end for readability.
+        terms_sorted = sorted([t for t in terms if t[0] != "total"], key=lambda item: item[0])
+        if any(t[0] == "total" for t in terms):
+            terms_sorted.append(("total", next(v for k, v in terms if k == "total")))
+        for term, scalar in terms_sorted:
             lines.append(f"    {term}: {scalar:+.3f}")
     if len(lines) == 1:
         lines[0] += " (no reward terms reported)"
