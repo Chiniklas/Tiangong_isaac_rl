@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import yaml
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
@@ -9,10 +10,30 @@ from isaaclab.assets import ArticulationCfg
 
 
 def _resolve_usd_path() -> Path:
-    """Resolve a Shadow Hand USD; never fall back to URDF conversion."""
+    """Resolve a Shadow Hand USD; prefer config.yaml override, then env, then default."""
 
-    env_path = os.environ.get("SHADOW_HAND_USD_PATH")
     candidates = []
+    # 1) config.yaml override (unigrasptransformer/cfg/config.yaml: unigrasptransformer.hand.asset_path)
+    try:
+        cfg_yaml = (
+            Path(__file__).resolve()
+            .parents[1]
+            .joinpath("envs", "unigrasptransformer", "cfg", "config.yaml")
+        )
+        if cfg_yaml.exists():
+            data = yaml.safe_load(cfg_yaml.read_text()) or {}
+            cfg_path = (
+                data.get("unigrasptransformer", {})
+                .get("hand", {})
+                .get("asset_path")
+            )
+            if cfg_path:
+                candidates.append(Path(cfg_path).expanduser().resolve())
+    except Exception:
+        pass
+
+    # 2) explicit env var
+    env_path = os.environ.get("SHADOW_HAND_USD_PATH")
     if env_path:
         candidates.append(Path(env_path).expanduser().resolve())
 
@@ -143,16 +164,12 @@ SHADOW_HAND_CFG = ArticulationCfg(
             stiffness=spec.get("stiffness", _DEFAULT_PD["stiffness"]),
             damping=spec.get("damping", _DEFAULT_PD["damping"]),
         )
-        # Limit to the joints present in the USD; THJ0 is not in this asset.
+        # Limit to the joints present in the USD; THJ0 is not in this asset, and wrist joints (WRJ1/2) are absent in the palm-only USD.
         for name, spec in {
             **{j: _DEFAULT_PD for j in _TARGET_INIT_JOINT_ORDER},
             **_REFERENCE_PD_SPECS,
-            "WRJ1": {"stiffness": 1.0, "damping": 0.1, "effort": 2.175},
-            "WRJ2": {"stiffness": 1.0, "damping": 0.1, "effort": 4.785},
         }.items()
         if name in {
-            "WRJ2",
-            "WRJ1",
             "FFJ4",
             "LFJ5",
             "MFJ4",

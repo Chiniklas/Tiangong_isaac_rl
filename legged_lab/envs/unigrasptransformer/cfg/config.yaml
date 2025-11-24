@@ -39,7 +39,7 @@ unigrasptransformer:
     
   hand:
     asset_type: shadowhand
-    asset_path: /home/chizhang/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_with_fingertip/shadow_hand_right/shadow_hand_right.usd
+    asset_path: /home/chizhang/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_with_fingertip/shadow_hand_right_for_conversion/shadow_hand_right_for_conversion.usd
     pos:
     - 0.5
     - 0.2

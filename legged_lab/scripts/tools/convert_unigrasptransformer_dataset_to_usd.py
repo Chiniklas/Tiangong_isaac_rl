@@ -141,7 +141,7 @@ def _convert_obj_to_usd(mesh_path: Path, out_dir: Path, force: bool) -> Path:
 
 
 def _bundle_static_usd(mesh_usd_paths: list[Path], out_dir: Path, object_name: str, force: bool) -> Path:
-    """Create a single static USD that references the mesh USD(s) and has RigidBody API applied.
+    """Create a single USD that references the mesh USD(s) and has RigidBody API applied.
 
     Returns the path to `<out_dir>/<object_name>_static.usd`.
     """
@@ -173,8 +173,8 @@ def _bundle_static_usd(mesh_usd_paths: list[Path], out_dir: Path, object_name: s
     schemas.define_rigid_body_properties(
         "/Object",
         schemas_cfg.RigidBodyPropertiesCfg(
-            disable_gravity=True,
-            kinematic_enabled=True,
+            disable_gravity=False,
+            kinematic_enabled=False,
             retain_accelerations=False,
         ),
         stage=stage,
