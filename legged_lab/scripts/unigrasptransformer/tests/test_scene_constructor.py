@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument(
         "--steps",
         type=int,
-        default=64,
+        default=-1,
         help="Simulation steps to run (-1 keeps the sim running until interrupted).",
     )
     return parser.parse_args()
@@ -81,7 +81,8 @@ def main():
     grasp_cfg.scene.num_envs = args.num_envs
 
     # instantiate unigrasptransformer env
-    env = UniGraspTransformerEnv(cfg=grasp_cfg, headless=args.headless)
+    env = UniGraspTransformerEnv(cfg=grasp_cfg, 
+                                 headless=args.headless)
     scene_cfg = env.scene.cfg
     scene = env.scene
 
@@ -105,19 +106,18 @@ def main():
 
 
     # implement controllers
-    # try:
-    #     actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
-    #     step_i = 0
-    #     run_forever = args.steps < 0
-    #     while run_forever or step_i < args.steps:
-    #         env.step(actions)
-    #         step_i += 1
-    # except KeyboardInterrupt:
-    #     pass
-    # finally:
-    #     if hasattr(env, "close"):
-    #         env.close()
-    #     simulation_app.close()
+    try:
+        step_i = 0
+        run_forever = args.steps < 0
+        while run_forever or step_i < args.steps:
+            env.sim.step(render=not args.headless)
+            step_i += 1
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if hasattr(env, "close"):
+            env.close()
+        simulation_app.close()
 
 
 if __name__ == "__main__":

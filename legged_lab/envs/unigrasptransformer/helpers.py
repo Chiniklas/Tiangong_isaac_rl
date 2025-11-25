@@ -32,7 +32,15 @@ def _load_yaml_cfg(filename: str) -> Dict[str, Any]:
 
 def _build_table_spawn(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # isolate table related hyperparameters from SPAWN_CFG
-    table_cfg = cfg.get("table", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(cfg, dict):
+        raise ValueError("spawn_cfg must be a dict-like object.")
+    table_cfg = cfg.get("table", {})
+    if not isinstance(table_cfg, dict):
+        raise ValueError("spawn_cfg.yaml must contain a 'table' mapping.")
+    required_keys = ["enable", "size", "pos", "rot_xyzw"]
+    missing = [key for key in required_keys if key not in table_cfg]
+    if missing:
+        raise ValueError(f"spawn_cfg.yaml 'table' section missing keys: {missing}. Did you rename them?")
     return {
         "enable": bool(table_cfg.get("enable", False)),
         "size": table_cfg.get("size"),
@@ -42,8 +50,25 @@ def _build_table_spawn(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_hand_spawn(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # isolate hand related hyperparameters from SPAWN_CFG
-    hand_cfg = cfg.get("hand", {}) if isinstance(cfg, dict) else {}
-    return hand_cfg if isinstance(hand_cfg, dict) else {}
+    if not isinstance(cfg, dict):
+        raise ValueError("spawn_cfg must be a dict-like object.")
+    hand_cfg = cfg.get("hand", {})
+    if not isinstance(hand_cfg, dict):
+        raise ValueError("spawn_cfg.yaml must contain a 'hand' mapping.")
+    required_keys = [
+        "asset_type",
+        "asset_path",
+        "pos",
+        "rot_xyzw",
+        "show_palm_dir",
+        "palm_dir_local",
+        "palm_dir_offset_local",
+        "palm_dir_scale",
+    ]
+    missing = [key for key in required_keys if key not in hand_cfg]
+    if missing:
+        raise ValueError(f"spawn_cfg.yaml 'hand' section missing keys: {missing}. Did you rename them?")
+    return hand_cfg
 
 def _pick_random_object_from_dir(default_dir: str) -> Dict[str, Any]:
     """Pick a random metadata.json two levels under default_dir and return its contents."""
@@ -61,45 +86,64 @@ def _pick_random_object_from_dir(default_dir: str) -> Dict[str, Any]:
     meta["metadata_path"] = str(meta_path)
     return meta
 
+def _load_metadata_from_object_path(object_path: str) -> Dict[str, Any]:
+    """Load metadata.json sitting next to a specified object usd path, if present."""
+    obj_path = Path(object_path).expanduser()
+    meta_path = obj_path.parent / "metadata.json"
+    if not meta_path.is_file():
+        return {}
+    try:
+        meta = json.loads(meta_path.read_text())
+    except Exception as exc:
+        raise ValueError(f"Failed to read metadata at {meta_path}: {exc}") from exc
+    meta["metadata_path"] = str(meta_path)
+    return meta
+
 def _build_object_spawn(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # isolate object related hyperparameters from SPAWN_CFG
-    obj_cfg = cfg.get("object", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(cfg, dict):
+        raise ValueError("spawn_cfg must be a dict-like object.")
+    obj_cfg = cfg.get("object", {})
+    if not isinstance(obj_cfg, dict):
+        raise ValueError("spawn_cfg.yaml must contain an 'object' mapping.")
+    required_keys = [
+        "enable",
+        "default_dir",
+        "object_path",
+        "size",
+        "pos",
+        "rot_xyzw",
+        "show_point_cloud",
+        "show_pca_axes",
+        "object_init",
+    ]
+    missing = [key for key in required_keys if key not in obj_cfg]
+    if missing:
+        raise ValueError(f"spawn_cfg.yaml 'object' section missing keys: {missing}. Did you rename them?")
+    
+    enable = obj_cfg.get("enable")
     default_dir = obj_cfg.get("default_dir")
     object_path = obj_cfg.get("object_path")
-    pc_fps = obj_cfg.get("pc_fps")
-    pca_axes = obj_cfg.get("pca_axes")
+    size = obj_cfg.get("size")
+    pos = obj_cfg.get("pos")
+    rot_xyzw = obj_cfg.get("rot_xyzw")
+    show_point_cloud = bool(obj_cfg.get("show_point_cloud", False))
+    show_pca_axes = bool(obj_cfg.get("show_pca_axes", False))
     object_init = obj_cfg.get("object_init")
-    metadata_path = obj_cfg.get("metadata_path")
 
+    #object_path missing flag
     path_missing = object_path is None or (isinstance(object_path, str) and len(object_path.strip()) == 0)
-    sampled_meta: Dict[str, Any] = {}
-    if path_missing:
-        if default_dir is None or (isinstance(default_dir, str) and len(default_dir.strip()) == 0):
-            raise ValueError("object_path is missing and no default_dir provided in spawn_cfg.yaml")
-        try:
-            sampled_meta = _pick_random_object_from_dir(default_dir)
-            object_path = sampled_meta.get("static_usd") or sampled_meta.get("object_path")
-            pc_fps = pc_fps or sampled_meta.get("pc_fps")
-            pca_axes = pca_axes or sampled_meta.get("pca_axes")
-            object_init = object_init or sampled_meta.get("object_init")
-            metadata_path = metadata_path or sampled_meta.get("metadata_path")
-        except ValueError as exc:
-            print(f"[WARN] {exc}. Disabling object spawn for this run.")
-            obj_cfg["enable"] = False
-            object_path = None
     return {
-        "enable": bool(obj_cfg.get("enable", False) and object_path is not None),
+        "enable": enable,
         "default_dir": default_dir,
         "object_path": object_path,
-        "show_point_cloud": bool(obj_cfg.get("show_point_cloud", False)),
-        "show_pca_axes": bool(obj_cfg.get("show_pca_axes", False)),
-        "size": obj_cfg.get("size"),
-        "pos": obj_cfg.get("pos"),
-        "rot_xyzw": obj_cfg.get("rot_xyzw"),
+        "show_point_cloud": show_point_cloud,
+        "show_pca_axes": show_pca_axes,
+        "size": size,
+        "pos": pos,
+        "rot_xyzw": rot_xyzw,
         "object_init": object_init,
-        "pc_fps": pc_fps,
-        "pca_axes": pca_axes,
-        "metadata_path": metadata_path,
+        "path_missing":path_missing
     }
 
 def _build_table_cfg(table_spawn: Dict[str, Any]) -> Optional[TableCfg]:
@@ -114,44 +158,89 @@ def _build_table_cfg(table_spawn: Dict[str, Any]) -> Optional[TableCfg]:
     )
 
 def _build_grasp_object_cfg(obj_spawn: Dict[str, Any]) -> Optional[GraspObjectCfg]:
-    """Instantiate GraspObjectCfg from spawn dict, requiring a USD path and optional point cloud/PCA overlays via explicit cfg paths."""
+    """Instantiate GraspObjectCfg from spawn dict, including random sampling fallback and overlay validation."""
+    required_keys = [
+        "enable",
+        "default_dir",
+        "object_path",
+        "show_point_cloud",
+        "show_pca_axes",
+        "size",
+        "pos",
+        "rot_xyzw",
+        "object_init",
+        "path_missing",
+    ]
+    if not isinstance(obj_spawn, dict):
+        raise ValueError("obj_spawn must be a dict-like object.")
+    
+    missing = [key for key in required_keys if key not in obj_spawn]
+    if missing:
+        raise ValueError(f"obj_spawn is missing keys: {missing}. It should match the structure returned by _build_object_spawn.")
+    
+    # return false if object spawning disabled
     if not obj_spawn.get("enable", False):
         return GraspObjectCfg(enable=False)
+
+    default_dir = obj_spawn.get("default_dir")
     object_path = obj_spawn.get("object_path")
+    pc_fps_path = obj_spawn.get("pc_fps_path") or obj_spawn.get("pc_fps")
+    pca_axes_path = obj_spawn.get("pca_axes_path") or obj_spawn.get("pca_axes")
+    object_init = obj_spawn.get("object_init")
+    metadata_path = obj_spawn.get("metadata_path")
+    show_point_cloud = bool(obj_spawn.get("show_point_cloud", False))
+    show_pca_axes = bool(obj_spawn.get("show_pca_axes", False))
+
+    # If an explicit object_path exists, try loading adjacent metadata.json to fill optional fields.
+    if object_path and not obj_spawn.get("path_missing", False):
+        meta = _load_metadata_from_object_path(object_path)
+        if meta:
+            object_path = sampled.get("static_usd")
+            pc_fps_path = meta.get("pc_fps_path") or meta.get("pc_fps")
+            pca_axes_path = meta.get("pca_axes_path") or meta.get("pca_axes")
+            object_init = meta.get("object_init")
+            metadata_path = meta.get("metadata_path")
+
+    # Sample a random object if path is missing and a default_dir is provided.
+    if obj_spawn.get("path_missing", False):
+        if default_dir is None or (isinstance(default_dir, str) and len(default_dir.strip()) == 0):
+            raise ValueError("object_path is missing and no default_dir provided for grasp object.")
+        sampled = _pick_random_object_from_dir(default_dir)
+        # print("Sampling object successful")
+        # print(sampled)
+        # input()
+        object_path = sampled.get("static_usd")
+        pc_fps_path = sampled.get("pc_fps")
+        pca_axes_path = sampled.get("pca_axes")
+        object_init = sampled.get("object_init")
+        metadata_path = sampled.get("metadata_path")
+
+    # validate if object path is finally get.
     if not object_path:
-        default_dir = obj_spawn.get("default_dir")
-        if default_dir:
-            sampled = _pick_random_object_from_dir(default_dir)
-            object_path = sampled.get("static_usd") or sampled.get("object_path")
-            # propagate optional metadata
-            obj_spawn = {
-                **obj_spawn,
-                "object_path": object_path,
-                "pc_fps_path": obj_spawn.get("pc_fps_path") or sampled.get("pc_fps_path"),
-                "pca_axes_path": obj_spawn.get("pca_axes_path") or sampled.get("pca_axes_path"),
-                "object_init": obj_spawn.get("object_init") or sampled.get("object_init"),
-                "metadata_path": obj_spawn.get("metadata_path") or sampled.get("metadata_path"),
-            }
-        if not object_path:
-            raise ValueError("grasp object must specify a USD path (object_path), and default_dir sampling failed.")
+        raise ValueError("Something happens when reading object metadata.")
+
+    # Validate overlays: if requested, paths must be provided.
+    if show_point_cloud and not pc_fps_path:
+        raise ValueError("show_point_cloud is True but pc_fps_path is missing (metadata).")
+    if show_pca_axes and not pca_axes_path:
+        raise ValueError("show_pca_axes is True but pca_axes_path is missing (metadata).")
 
     return GraspObjectCfg(
-        # general 
+        # general
         enable=True,
-        default_dir=obj_spawn.get("default_dir"),
+        default_dir=default_dir,
         object_path=object_path,
         size=tuple(obj_spawn.get("size") or (0.1, 0.1, 0.1)),
         pos=tuple(obj_spawn.get("pos") or (0.0, 0.0, 0.5)),
         rot_xyzw=tuple(obj_spawn.get("rot_xyzw") or (0.0, 0.0, 0.0, 1.0)),
-        object_init=obj_spawn.get("object_init"),
-        metadata_path=obj_spawn.get("metadata_path"),
+        object_init=object_init,
+        metadata_path=metadata_path,
 
         # point cloud related
-        show_point_cloud=bool(obj_spawn.get("show_point_cloud", False)),
-        pc_fps_path=obj_spawn.get("pc_fps_path"),
-        
+        show_point_cloud=show_point_cloud,
+        pc_fps_path=pc_fps_path,
+
         # pca related
-        show_pca_axes=bool(obj_spawn.get("show_pca_axes", False)),
-        pca_axes_path=obj_spawn.get("pca_axes_path"),
-        
+        show_pca_axes=show_pca_axes,
+        pca_axes_path=pca_axes_path,
     )

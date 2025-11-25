@@ -83,19 +83,14 @@ class UniGraspTransformerEnv(VecEnv):
         self.sim.reset()
 
         self.robot: Articulation = self.scene["robot"]
-        self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
-
-        self.reward_manager = RewardManager(self.cfg.reward, self)
-
-        self.init_buffers()
-
-        env_ids = torch.arange(self.num_envs, device=self.device)
-        self.event_manager = EventManager(self.cfg.domain_rand.events, self)
-        if "startup" in self.event_manager.available_modes:
-            self.event_manager.apply(mode="startup")
-        self.reset(env_ids)
-        # AMP loader not used for grasping; no motion visualization needed.
-        self.motion_len = 0
+        # self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
+        # self.reward_manager = RewardManager(self.cfg.reward, self)
+        # self.init_buffers()
+        # env_ids = torch.arange(self.num_envs, device=self.device)
+        # self.event_manager = EventManager(self.cfg.domain_rand.events, self)
+        # if "startup" in self.event_manager.available_modes:
+        #     self.event_manager.apply(mode="startup")
+        # self.reset(env_ids)
 
     def init_buffers(self):
         self.extras = {}

@@ -80,10 +80,21 @@ PPO_CFG = _load_yaml_cfg("ppo_cfg.yaml")
 DEFAULT_TABLE_SPAWN = _build_table_spawn(SPAWN_CFG)
 DEFAULT_OBJECT_SPAWN = _build_object_spawn(SPAWN_CFG)
 DEFAULT_HAND_SPAWN = _build_hand_spawn(SPAWN_CFG)
+
+# print("DEFAULT_TABLE_SPAWN separation successful")
+# print(DEFAULT_TABLE_SPAWN)
+# print("DEFAULT_OBJECT_SPAWN separation successful")
+# print(DEFAULT_OBJECT_SPAWN)
+# input()
 #===============================================================
 # build table, grasp and hand config from hyperparameters
 TABLE_CFG = _build_table_cfg(DEFAULT_TABLE_SPAWN)
+# print("TABLE_CFG construction successful")
+# print(TABLE_CFG)
+
 GRASP_OBJECT_CFG = _build_grasp_object_cfg(DEFAULT_OBJECT_SPAWN)
+# print("GRASP_OBJECT_CFG construction successful")
+# print(GRASP_OBJECT_CFG)
 
 @configclass
 class UnigraspTransformerSceneCfg(MySceneCfg):
