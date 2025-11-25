@@ -69,7 +69,8 @@ from legged_lab.envs.unigrasptransformer.helpers import(
     _pick_random_object_from_dir,
     _build_object_spawn,
     _build_table_cfg,
-    _build_grasp_object_cfg
+    _build_grasp_object_cfg,
+    _build_hand_cfg,
 )
 # unpack hyperparameters from yaml files
 SPAWN_CFG = _load_yaml_cfg("spawn_cfg.yaml")
@@ -96,6 +97,9 @@ GRASP_OBJECT_CFG = _build_grasp_object_cfg(DEFAULT_OBJECT_SPAWN)
 # print("GRASP_OBJECT_CFG construction successful")
 # print(GRASP_OBJECT_CFG)
 
+# override hand cfg init state with DEFAULT_HAND_SPAWN
+HAND_CFG = _build_hand_cfg(DEFAULT_HAND_SPAWN, SHADOW_HAND_CFG)
+
 @configclass
 class UnigraspTransformerSceneCfg(MySceneCfg):
     """This is where you instantiate your custom scene cfg"""
@@ -105,7 +109,7 @@ class UnigraspTransformerSceneCfg(MySceneCfg):
     seed: int = 42 # at training runtime, the scene seed comes from the agent
 
     # must have robot, table, grasp_object
-    robot: ArticulationCfg = SHADOW_HAND_CFG
+    robot: ArticulationCfg = HAND_CFG
     table: TableCfg = TABLE_CFG
     grasp_object: GraspObjectCfg = GRASP_OBJECT_CFG
     
@@ -121,7 +125,7 @@ class UnigraspTransformerGraspEnv:
         max_episode_length_s=20.0,
         num_envs=4096,
         env_spacing=2.5,
-        robot=SHADOW_HAND_CFG, # this robot is for scene generation
+        robot=HAND_CFG, # this robot is for scene generation
         table=TABLE_CFG,
         grasp_object=GRASP_OBJECT_CFG,
     )
@@ -133,7 +137,8 @@ class UnigraspTransformerGraspEnv:
     ) # this robot is for actor critic calculation
 
     reward = GraspRewardCfg()
-    sim: SimCfg = SimCfg()
+    
+    # this part I don't know what use of it yet
     domain_rand: DomainRandCfg = DomainRandCfg(action_delay=ActionDelayCfg(enable=False))
     noise: NoiseCfg = NoiseCfg(add_noise=False)
     normalization: NormalizationCfg = NormalizationCfg(
@@ -151,6 +156,8 @@ class UnigraspTransformerGraspEnv:
         clip_actions=100.0,
         height_scan_offset=0.5,
     )
+    # ============================
+    sim: SimCfg = SimCfg()
 
 @configclass
 class UnigraspTransformerAgentCfg(RslRlOnPolicyRunnerCfg):

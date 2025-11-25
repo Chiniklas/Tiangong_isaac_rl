@@ -35,53 +35,6 @@ from isaaclab.assets.articulation import ArticulationCfg
 
 from legged_lab.assets import ISAAC_ASSET_DIR
 
-
-def _resolve_usd_path() -> Path:
-    """Resolve the Shadow Hand USD path, allowing overrides via config or env."""
-    candidates = []
-
-    # 1) config.yaml override (envs/unigrasptransformer/cfg/config.yaml: unigrasptransformer.hand.asset_path)
-    try:
-        cfg_yaml = (
-            Path(__file__).resolve()
-            .parents[1]
-            .joinpath("envs", "unigrasptransformer", "cfg", "config.yaml")
-        )
-        if cfg_yaml.exists():
-            data = yaml.safe_load(cfg_yaml.read_text()) or {}
-            cfg_path = (
-                data.get("unigrasptransformer", {})
-                .get("hand", {})
-                .get("asset_path")
-            )
-            if cfg_path:
-                candidates.append(Path(cfg_path).expanduser().resolve())
-    except Exception:
-        pass
-
-    # 2) explicit env var
-    env_path = os.environ.get("SHADOW_HAND_USD_PATH")
-    if env_path:
-        candidates.append(Path(env_path).expanduser().resolve())
-
-    # 3) fallback to checked-in USD
-    candidates.append(
-        Path(ISAAC_ASSET_DIR)
-        / "shadow_hand_with_fingertip"
-        / "shadow_hand_right_for_conversion"
-        / "shadow_hand_right_for_conversion.usd"
-    )
-
-    for candidate in candidates:
-        if candidate and candidate.exists():
-            return candidate
-
-    raise FileNotFoundError(
-        "Shadow hand USD not found. Set SHADOW_HAND_USD_PATH or place a USD at "
-        "`legged_lab/assets/shadow_hand_with_fingertip/shadow_hand_right_for_conversion/shadow_hand_right_for_conversion.usd`."
-    )
-
-
 TARGET_INIT_JOINT_POS: Dict[str, float] = {
     # Finger flex joints
     "FFJ4": 0.1,
@@ -116,14 +69,20 @@ REFERENCE_PD = {
     "effort": 1.0,
 }
 
-_SHADOW_USD_PATH = _resolve_usd_path()
-
 SHADOW_HAND_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Hand",
     spawn=sim_utils.UsdFileCfg(
-        usd_path=_SHADOW_USD_PATH.as_posix(),
+        usd_path= f"{ISAAC_ASSET_DIR}/shadow_hand_with_fingertip/shadow_hand_right_for_conversion/shadow_hand_right_for_conversion.usd",
         activate_contact_sensors=True,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=True,
+            # retain_accelerations=False,
+            # linear_damping=0.0,
+            # angular_damping=0.0,
+            # max_linear_velocity=1000.0,
+            # max_angular_velocity=1000.0,
+            # max_depenetration_velocity=1.0,
+            ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
             solver_position_iteration_count=8,

@@ -122,19 +122,6 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
     def __init__(self, config: "BaseSceneCfg", physics_dt, step_dt):
         super().__init__(num_envs=config.num_envs, env_spacing=config.env_spacing)
 
-        # Validate robot, table, and grasp object early so we fail fast before spawning anything.
-        robot_cfg_in = getattr(config, "robot", None)
-        shadow_usd = getattr(getattr(SHADOW_HAND_CFG, "spawn", None), "usd_path", None)
-        usd_path_in = getattr(getattr(robot_cfg_in, "spawn", None), "usd_path", None)
-        robot_cfg = None
-        if getattr(robot_cfg_in, "enable", True):
-            if not (isinstance(robot_cfg_in, ArticulationCfg) and usd_path_in == shadow_usd):
-                raise ValueError("UniGraspSceneCfg requires the custom Shadow Hand ArticulationCfg (SHADOW_HAND_CFG) when robot is enabled.")
-            robot_cfg = robot_cfg_in.replace(prim_path="{ENV_REGEX_NS}/Robot")
-
-        object_cfg_in = getattr(config, "grasp_object", getattr(config, "object", None))
-
-
         # now let's spawn the stage
         # spawn light
         self.light = AssetBaseCfg(
@@ -159,7 +146,9 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
                         restitution=table_cfg.restitution,
                     ),
                     collision_props=sim_utils.CollisionPropertiesCfg(),
-                    rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        disable_gravity=True
+                    ),
                 ),
                 init_state=RigidObjectCfg.InitialStateCfg(pos=table_cfg.pos, rot=table_cfg.rot_xyzw),
             )
@@ -229,6 +218,7 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
             pass
 
         # spawn robot if enabled
+        robot_cfg = getattr(config, "robot", None)
         if robot_cfg is not None:
             self.robot: ArticulationCfg = robot_cfg
             print(f"[UniGraspSceneCfg] Robot prim: {self.robot.prim_path}")

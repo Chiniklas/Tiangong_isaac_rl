@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import isaaclab.sim as sim_utils
+from isaaclab.assets.articulation import ArticulationCfg
 from legged_lab.envs.base.my_confg import GraspObjectCfg, TableCfg
 
 def _load_yaml_cfg(filename: str) -> Dict[str, Any]:
@@ -60,10 +61,10 @@ def _build_hand_spawn(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "asset_path",
         "pos",
         "rot_xyzw",
-        "show_palm_dir",
-        "palm_dir_local",
-        "palm_dir_offset_local",
-        "palm_dir_scale",
+        # "show_palm_dir",
+        # "palm_dir_local",
+        # "palm_dir_offset_local",
+        # "palm_dir_scale",
     ]
     missing = [key for key in required_keys if key not in hand_cfg]
     if missing:
@@ -244,3 +245,17 @@ def _build_grasp_object_cfg(obj_spawn: Dict[str, Any]) -> Optional[GraspObjectCf
         show_pca_axes=show_pca_axes,
         pca_axes_path=pca_axes_path,
     )
+
+
+def _build_hand_cfg(hand_spawn: Dict[str, Any], hand_cfg: ArticulationCfg) -> ArticulationCfg:
+    """Convenience wrapper to override hand cfg from spawn dict."""
+    if not isinstance(hand_spawn, dict):
+        return hand_cfg
+    hand_pos = tuple(hand_spawn.get("pos"))
+    hand_rot = tuple(hand_spawn.get("rot_xyzw"))
+    hand_cfg.init_state.pos = hand_pos
+    hand_cfg.init_state.rot = hand_rot
+    # print("override default hand spawning cfg")
+    # print(hand_cfg)
+    # input()
+    return hand_cfg

@@ -83,6 +83,17 @@ def main():
     # instantiate unigrasptransformer env
     env = UniGraspTransformerEnv(cfg=grasp_cfg, 
                                  headless=args.headless)
+    env.scene.reset(torch.arange(env.num_envs, device=env.device))
+
+    init_dict = env.robot.cfg.init_state.joint_pos
+    joint_names = env.robot.data.joint_names
+    pos = torch.zeros(env.num_envs, len(joint_names), device=env.device)
+    for i, name in enumerate(joint_names):
+        if name in init_dict:
+            pos[:, i] = float(init_dict[name])
+    vel = torch.zeros_like(pos)
+    env.robot.write_joint_state_to_sim(position=pos, velocity=vel)
+    
     scene_cfg = env.scene.cfg
     scene = env.scene
 
