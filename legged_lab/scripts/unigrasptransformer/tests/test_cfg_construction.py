@@ -41,18 +41,21 @@ def main():
         UnigraspTransformerGraspEnv,
         UnigraspTransformerSceneCfg,
     )
-
+    
+    # unloading hyperparameters from yaml
     spawn_cfg = _load_yaml_cfg("spawn_cfg.yaml")
     weights_cfg = _load_yaml_cfg("weights_cfg.yaml")
     ppo_cfg = _load_yaml_cfg("ppo_cfg.yaml")
 
+    # isolating hyperparameters for table, hand and object
     table_spawn = _build_table_spawn(spawn_cfg)
     hand_spawn = _build_hand_spawn(spawn_cfg)
     object_spawn = _build_object_spawn(spawn_cfg)
 
     print("[INFO] Spawn dicts:")
     pprint({"table": table_spawn, "hand": hand_spawn, "object": object_spawn})
-
+    print("###############################################")
+    # prepare cfgs for table, hand and object for scene cfg construction
     table_cfg = _build_table_cfg(table_spawn)
     try:
         object_cfg = _build_grasp_object_cfg(object_spawn)
@@ -62,14 +65,15 @@ def main():
 
     print("[INFO] Typed cfgs:")
     pprint({"table_cfg": table_cfg, "object_cfg": object_cfg})
-
+    print("###############################################")
+    
+    # construct the scene cfg using table and object
     scene_cfg = UnigraspTransformerSceneCfg(
         table=table_cfg,
         grasp_object=object_cfg,
     )
-    env_cfg = UnigraspTransformerGraspEnv(scene=scene_cfg)
 
-    print("[INFO] Scene cfg summary:")
+    print("[INFO] UnigraspTransformerSceneCfg construction successful, summary:")
     pprint(
         {
             "num_envs": scene_cfg.num_envs,
@@ -79,7 +83,12 @@ def main():
             "object_cfg": scene_cfg.grasp_object,
         }
     )
-    print("[INFO] Grasp env cfg summary:")
+
+    # construct the GraspTask env using the scene cfg
+    env_cfg = UnigraspTransformerGraspEnv(scene=scene_cfg)
+
+    
+    print("[INFO] UnigraspTransformerGraspEnv cfg construction successful, summary:")
     pprint(
         {
             "device": env_cfg.device,

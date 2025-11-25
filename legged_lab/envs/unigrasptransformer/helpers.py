@@ -114,7 +114,7 @@ def _build_table_cfg(table_spawn: Dict[str, Any]) -> Optional[TableCfg]:
     )
 
 def _build_grasp_object_cfg(obj_spawn: Dict[str, Any]) -> Optional[GraspObjectCfg]:
-    # Instantiate object config from GraspObjectCfg; USD path is mandatory.
+    """Instantiate GraspObjectCfg from spawn dict, requiring a USD path and optional point cloud/PCA overlays via explicit cfg paths."""
     if not obj_spawn.get("enable", False):
         return GraspObjectCfg(enable=False)
     object_path = obj_spawn.get("object_path")
@@ -127,8 +127,8 @@ def _build_grasp_object_cfg(obj_spawn: Dict[str, Any]) -> Optional[GraspObjectCf
             obj_spawn = {
                 **obj_spawn,
                 "object_path": object_path,
-                "pc_fps": obj_spawn.get("pc_fps") or sampled.get("pc_fps"),
-                "pca_axes": obj_spawn.get("pca_axes") or sampled.get("pca_axes"),
+                "pc_fps_path": obj_spawn.get("pc_fps_path") or sampled.get("pc_fps_path"),
+                "pca_axes_path": obj_spawn.get("pca_axes_path") or sampled.get("pca_axes_path"),
                 "object_init": obj_spawn.get("object_init") or sampled.get("object_init"),
                 "metadata_path": obj_spawn.get("metadata_path") or sampled.get("metadata_path"),
             }
@@ -136,16 +136,22 @@ def _build_grasp_object_cfg(obj_spawn: Dict[str, Any]) -> Optional[GraspObjectCf
             raise ValueError("grasp object must specify a USD path (object_path), and default_dir sampling failed.")
 
     return GraspObjectCfg(
+        # general 
         enable=True,
         default_dir=obj_spawn.get("default_dir"),
         object_path=object_path,
-        show_point_cloud=bool(obj_spawn.get("show_point_cloud", False)),
-        show_pca_axes=bool(obj_spawn.get("show_pca_axes", False)),
         size=tuple(obj_spawn.get("size") or (0.1, 0.1, 0.1)),
         pos=tuple(obj_spawn.get("pos") or (0.0, 0.0, 0.5)),
         rot_xyzw=tuple(obj_spawn.get("rot_xyzw") or (0.0, 0.0, 0.0, 1.0)),
         object_init=obj_spawn.get("object_init"),
-        pc_fps=obj_spawn.get("pc_fps"),
-        pca_axes=obj_spawn.get("pca_axes"),
         metadata_path=obj_spawn.get("metadata_path"),
+
+        # point cloud related
+        show_point_cloud=bool(obj_spawn.get("show_point_cloud", False)),
+        pc_fps_path=obj_spawn.get("pc_fps_path"),
+        
+        # pca related
+        show_pca_axes=bool(obj_spawn.get("show_pca_axes", False)),
+        pca_axes_path=obj_spawn.get("pca_axes_path"),
+        
     )

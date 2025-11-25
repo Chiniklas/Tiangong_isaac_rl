@@ -46,12 +46,17 @@ class GraspObjectCfg:
     enable: bool = True
     default_dir: str | None = None  # directory to sample objects when object_path is empty
     object_path: str | None = None  # explicit USD 
-    show_point_cloud: bool = False
-    show_pca_axes: bool = False
     size: tuple = (0.1, 0.1, 0.1)
     pos: tuple = (0.0, 0.0, 0.5)
     rot_xyzw: tuple = (0.0, 0.0, 0.0, 1.0)
     object_init: dict | None = None
-    pc_fps: int | None = None
-    pca_axes: list | None = None
     metadata_path: str | None = None
+
+    # point cloud related features
+    show_point_cloud: bool = False
+    pc_fps_path: str| None = None
+    
+    # pca axes related features
+    show_pca_axes: bool = False
+    pca_axes_path: str | None = None
+    

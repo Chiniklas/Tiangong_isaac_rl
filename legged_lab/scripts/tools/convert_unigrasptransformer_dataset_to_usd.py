@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ugtf-root",
         type=Path,
-        default=Path("dataset/unigrasptransformer_asset/meshdatav3_scaled"),
+        default=Path("/home/chizhang/projects/Tiangong_isaac_rl/dataset/unigrasptransformer_asset/meshdatav3_scaled"),
         help="Root of UniGraspTransformer mesh dataset (meshdatav3_scaled)",
     )
     parser.add_argument("--category", type=str, default="core", help="Category folder to sample from (core/sem/ddg/mujoco)")

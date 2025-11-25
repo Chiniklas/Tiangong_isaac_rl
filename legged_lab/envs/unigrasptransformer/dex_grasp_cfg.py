@@ -91,6 +91,7 @@ class UnigraspTransformerSceneCfg(MySceneCfg):
     max_episode_length_s: float = 20.0
     num_envs: int = 4096
     env_spacing: float = 2.5
+    seed: int = 42 # at training runtime, the scene seed comes from the agent
 
     # must have robot, table, grasp_object
     robot: ArticulationCfg = SHADOW_HAND_CFG
@@ -139,20 +140,6 @@ class UnigraspTransformerGraspEnv:
         clip_actions=100.0,
         height_scan_offset=0.5,
     )
-
-    # disabled velocity heading commands
-    commands: CommandsCfg = CommandsCfg(
-        resampling_time_range=(0.0, 0.0),
-        rel_standing_envs=1.0,
-        rel_heading_envs=0.0,
-        heading_command=False,
-        debug_vis=False,
-        ranges=CommandRangesCfg(
-            lin_vel_x=(0.0, 0.0), lin_vel_y=(0.0, 0.0), ang_vel_z=(0.0, 0.0), heading=(0.0, 0.0)
-        ),
-    )
-    
-
 
 @configclass
 class UnigraspTransformerAgentCfg(RslRlOnPolicyRunnerCfg):

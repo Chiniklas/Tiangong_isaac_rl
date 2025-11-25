@@ -232,6 +232,8 @@ For programmatic keyboard bindings inside environments, see `legged_lab/utils/ke
 assets related:
 - Replicate the ShadowHand tendon mimic constraints from the original MJCF (fixed tendons coupling distal/proximal joints) in the USD/controller to match UniGraspTransformer hand behavior.
 
+- the dataset processors are hitting some linux inotify watch not enough error(should fix)
+
 reward related:
 - Port the reference UniGraspTransformer reset/randomization logic: object/goal pose sampling with noise, hand pose noise, and domain randomization knobs.
 - Align goal/success bookkeeping and reset conditions with the reference state_based_grasp task.
