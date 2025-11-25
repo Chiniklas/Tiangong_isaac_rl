@@ -17,11 +17,10 @@ table:
 object:
   enable: true
   default_dir: /home/chizhang/projects/Tiangong_isaac_rl/dataset/unigrasptransformer_asset/meshdatav3_scaled/subset_core10
-  spawn_mesh: true
   show_point_cloud: true
   show_pca_axes: true
   # Set to a USD file or a dataset object directory containing metadata.json. If null, a dataset object is auto-picked.
-  object_path: null
+  object_path: /home/chizhang/projects/Tiangong_isaac_rl/dataset/unigrasptransformer_asset/meshdatav3_scaled/subset_core10/core/jar-56f7b662be65b7824725f67267e31c89
   size:
   - 0.1
   - 0.1

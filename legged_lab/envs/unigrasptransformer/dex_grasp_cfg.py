@@ -22,7 +22,6 @@ import random
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from legged_lab.assets.shadow_hand_with_fingertip.shadow_hand import SHADOW_HAND_CFG
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -54,122 +53,53 @@ from legged_lab.envs.base.base_config import (
     RobotCfg,
     SimCfg,
 )
-from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_TERRAINS_CFG  # noqa:F401
 
-# Load YAML configs at import so hyperparameters are available module-wide.
-def _load_yaml_cfg(filename: str) -> Dict[str, Any]:
-    cfg_path = Path(__file__).resolve().parent / "cfg" / filename
-    try:
-        import yaml
-    except ImportError:
-        return {}
-    if not cfg_path.is_file():
-        return {}
-    content = cfg_path.read_text(encoding="utf-8")
-    if not content.strip():
-        return {}
-    try:
-        loaded = yaml.safe_load(content)
-    except Exception:
-        return {}
-    return loaded or {}
+from legged_lab.assets.shadow_hand_with_fingertip.shadow_hand import SHADOW_HAND_CFG
+from legged_lab.envs.base.my_confg import(
+    DexHandCfg,
+    MySceneCfg,
+    TableCfg,
+    GraspObjectCfg
+)
 
-
+from legged_lab.envs.unigrasptransformer.helpers import(
+    _load_yaml_cfg,
+    _build_table_spawn,
+    _build_hand_spawn,
+    _pick_random_object_from_dir,
+    _build_object_spawn,
+    _build_table_cfg,
+    _build_grasp_object_cfg
+)
+# unpack hyperparameters from yaml files
 SPAWN_CFG = _load_yaml_cfg("spawn_cfg.yaml")
 WEIGHTS_CFG = _load_yaml_cfg("weights_cfg.yaml")
 PPO_CFG = _load_yaml_cfg("ppo_cfg.yaml")
 
-def _build_table_spawn(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    table_cfg = cfg.get("table", {}) if isinstance(cfg, dict) else {}
-    return {
-        "enable": bool(table_cfg.get("enable", False)),
-        "size": table_cfg.get("size"),
-        "pos": table_cfg.get("pos"),
-        "rot_xyzw": table_cfg.get("rot_xyzw"),
-    }
-
-
-def _build_hand_spawn(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    hand_cfg = cfg.get("hand", {}) if isinstance(cfg, dict) else {}
-    return hand_cfg if isinstance(hand_cfg, dict) else {}
-
-def _pick_random_object_from_dir(default_dir: str) -> Dict[str, Any]:
-    """Pick a random metadata.json two levels under default_dir and return its contents."""
-    dir_path = Path(default_dir).expanduser()
-    if not dir_path.is_dir():
-        raise ValueError(f"default_dir '{default_dir}' is not a valid directory for grasp object selection")
-    candidates = list(dir_path.glob("*/*/metadata.json"))
-    if not candidates:
-        raise ValueError(f"default_dir '{default_dir}' contains no files to sample grasp objects from")
-    meta_path = random.choice(candidates)
-    try:
-        meta = json.loads(meta_path.read_text())
-    except Exception as exc:
-        raise ValueError(f"Failed to read metadata at {meta_path}: {exc}") from exc
-    meta["metadata_path"] = str(meta_path)
-    return meta
-
-
-def _build_object_spawn(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    obj_cfg = cfg.get("object", {}) if isinstance(cfg, dict) else {}
-    default_dir = obj_cfg.get("default_dir")
-    object_path = obj_cfg.get("object_path")
-    pc_fps = obj_cfg.get("pc_fps")
-    pca_axes = obj_cfg.get("pca_axes")
-    object_init = obj_cfg.get("object_init")
-    metadata_path = obj_cfg.get("metadata_path")
-
-    path_missing = object_path is None or (isinstance(object_path, str) and len(object_path.strip()) == 0)
-    sampled_meta: Dict[str, Any] = {}
-    if path_missing:
-        if default_dir is None or (isinstance(default_dir, str) and len(default_dir.strip()) == 0):
-            raise ValueError("object_path is missing and no default_dir provided in spawn_cfg.yaml")
-        try:
-            sampled_meta = _pick_random_object_from_dir(default_dir)
-            object_path = sampled_meta.get("static_usd") or sampled_meta.get("object_path")
-            pc_fps = pc_fps or sampled_meta.get("pc_fps")
-            pca_axes = pca_axes or sampled_meta.get("pca_axes")
-            object_init = object_init or sampled_meta.get("object_init")
-            metadata_path = metadata_path or sampled_meta.get("metadata_path")
-        except ValueError as exc:
-            print(f"[WARN] {exc}. Disabling object spawn for this run.")
-            obj_cfg["enable"] = False
-            obj_cfg["spawn_mesh"] = False
-            object_path = None
-    return {
-        "enable": bool(obj_cfg.get("enable", False) and (object_path is not None or not obj_cfg.get("spawn_mesh", False))),
-        "default_dir": default_dir,
-        "object_path": object_path,
-        "spawn_mesh": bool(obj_cfg.get("spawn_mesh", False)),
-        "show_point_cloud": bool(obj_cfg.get("show_point_cloud", False)),
-        "show_pca_axes": bool(obj_cfg.get("show_pca_axes", False)),
-        "size": obj_cfg.get("size"),
-        "pos": obj_cfg.get("pos"),
-        "rot_xyzw": obj_cfg.get("rot_xyzw"),
-        "object_init": object_init,
-        "pc_fps": pc_fps,
-        "pca_axes": pca_axes,
-        "metadata_path": metadata_path,
-    }
-
+# isolate hyperparameters for three items from spawn_cfg
 DEFAULT_TABLE_SPAWN = _build_table_spawn(SPAWN_CFG)
 DEFAULT_OBJECT_SPAWN = _build_object_spawn(SPAWN_CFG)
 DEFAULT_HAND_SPAWN = _build_hand_spawn(SPAWN_CFG)
 #===============================================================
+# build table, grasp and hand config from hyperparameters
+TABLE_CFG = _build_table_cfg(DEFAULT_TABLE_SPAWN)
+GRASP_OBJECT_CFG = _build_grasp_object_cfg(DEFAULT_OBJECT_SPAWN)
+
 @configclass
-class UnigraspTransformerSceneCfg(BaseSceneCfg):
-    """Scene config tailored for object grasping tasks."""
-    # Default to the Shadow Hand asset; can be overridden via cfg if needed.
+class UnigraspTransformerSceneCfg(MySceneCfg):
+    """This is where you instantiate your custom scene cfg"""
+    max_episode_length_s: float = 20.0
+    num_envs: int = 4096
+    env_spacing: float = 2.5
+
+    # must have robot, table, grasp_object
     robot: ArticulationCfg = SHADOW_HAND_CFG
-    table: Optional[ArticulationCfg] = None
-    grasp_object: Optional[ArticulationCfg] = None
-    table_spawn: Dict[str, Any] = DEFAULT_TABLE_SPAWN
-    object_spawn: Dict[str, Any] = DEFAULT_OBJECT_SPAWN
-    hand_spawn: Dict[str, Any] = DEFAULT_HAND_SPAWN
-
-
+    table: TableCfg = TABLE_CFG
+    grasp_object: GraspObjectCfg = GRASP_OBJECT_CFG
+    
 @configclass
-class LiteRewardCfg:
+class GraspRewardCfg:
+    # this is the part where you implement reward configs
     pass
 
 @configclass
@@ -179,27 +109,18 @@ class UnigraspTransformerGraspEnv:
         max_episode_length_s=20.0,
         num_envs=4096,
         env_spacing=2.5,
-        robot=SHADOW_HAND_CFG,
-        max_init_terrain_level=5,
-        height_scanner=HeightScannerCfg(
-            enable_height_scan=False,
-            prim_body_name="pelvis",
-            resolution=0.1,
-            size=(1.6, 1.0),
-            debug_vis=False,
-            drift_range=(0.0, 0.0),  # (0.3, 0.3)
-        ),
-        table=None,  # table_spawn will be used
-        grasp_object=None,  # object_spawn will be used
+        robot=SHADOW_HAND_CFG, # this robot is for scene generation
+        table=TABLE_CFG,
+        grasp_object=GRASP_OBJECT_CFG,
     )
-    robot: RobotCfg = RobotCfg(
+    robot: DexHandCfg = DexHandCfg(
         actor_obs_history_length=10,
         critic_obs_history_length=10,
         action_scale=0.25,
-        terminate_contacts_body_names=["knee_pitch.*", "shoulder_roll.*", "elbow_pitch.*", "pelvis"],
-        feet_body_names=["ankle_roll.*"],
-    )
-    reward = LiteRewardCfg()
+        terminate_contacts_body_names=[],
+    ) # this robot is for actor critic calculation
+
+    reward = GraspRewardCfg()
     sim: SimCfg = SimCfg()
     domain_rand: DomainRandCfg = DomainRandCfg(action_delay=ActionDelayCfg(enable=False))
     noise: NoiseCfg = NoiseCfg(add_noise=False)

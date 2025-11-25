@@ -85,17 +85,6 @@ class UniGraspTransformerEnv(VecEnv):
         self.robot: Articulation = self.scene["robot"]
         self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
 
-        command_cfg = UniformVelocityCommandCfg(
-            asset_name="robot",
-            resampling_time_range=self.cfg.commands.resampling_time_range,
-            rel_standing_envs=self.cfg.commands.rel_standing_envs,
-            rel_heading_envs=self.cfg.commands.rel_heading_envs,
-            heading_command=self.cfg.commands.heading_command,
-            heading_control_stiffness=self.cfg.commands.heading_control_stiffness,
-            debug_vis=self.cfg.commands.debug_vis,
-            ranges=self.cfg.commands.ranges,
-        )
-        self.command_generator = UniformVelocityCommand(cfg=command_cfg, env=self)
         self.reward_manager = RewardManager(self.cfg.reward, self)
 
         self.init_buffers()

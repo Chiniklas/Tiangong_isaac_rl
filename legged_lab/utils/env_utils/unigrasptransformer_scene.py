@@ -33,23 +33,23 @@ if TYPE_CHECKING:
 
 @configclass
 class UniGraspSceneCfg(InteractiveSceneCfg):
-    """Interactive scene with optional grasp props (table + object)."""
+    """This is the scene constructor that we use to generate scene."""
 
     def __init__(self, config: "BaseSceneCfg", physics_dt, step_dt):
         super().__init__(num_envs=config.num_envs, env_spacing=config.env_spacing)
 
-        self.terrain = None
-
+        # Validate robot cfg early so we fail fast before spawning anything else.
         if not isinstance(config.robot, ArticulationCfg):
             raise ValueError("UniGraspSceneCfg requires a robot ArticulationCfg (e.g., Shadow Hand).")
-        self.robot: ArticulationCfg = config.robot.replace(prim_path="{ENV_REGEX_NS}/Robot")
-        print(f"[UniGraspSceneCfg] Robot prim: {self.robot.prim_path}")
+        robot_cfg = config.robot.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
+        # spawn light
         self.light = AssetBaseCfg(
             prim_path="/World/light",
             spawn=sim_utils.DistantLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
         )
 
+        # spawn table
         table_cfg = getattr(config, "table", None)
         if isinstance(table_cfg, RigidObjectCfg):
             self.table = table_cfg.replace(prim_path="{ENV_REGEX_NS}/Table")
@@ -58,6 +58,7 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
             # Require an explicit RigidObjectCfg table for now to avoid API mismatches.
             raise ValueError("UniGraspSceneCfg requires a table (RigidObjectCfg).")
 
+        # spawn object
         object_cfg = getattr(config, "grasp_object", getattr(config, "object", None))
         if isinstance(object_cfg, RigidObjectCfg):
             self.object = object_cfg.replace(prim_path="{ENV_REGEX_NS}/Object")
@@ -79,6 +80,10 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
                 print(f"[UniGraspSceneCfg] Object prim: {self.object.prim_path}")
             else:
                 raise ValueError("UniGraspSceneCfg requires an object (grasp_object cfg or object_spawn with object_path).")
+
+        # spawn robot
+        self.robot: ArticulationCfg = robot_cfg
+        print(f"[UniGraspSceneCfg] Robot prim: {self.robot.prim_path}")
 
 
 __all__ = ["UniGraspSceneCfg"]
