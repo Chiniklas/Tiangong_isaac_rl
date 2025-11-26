@@ -82,7 +82,29 @@ class UniGraspTransformerEnv(VecEnv):
         self.scene = InteractiveScene(scene_cfg)
         self.sim.reset()
 
+        # extract seperate components from scene
         self.robot: Articulation = self.scene["robot"]
+        self.fingertip_ids, _ = self.robot.find_bodies(
+            name_keys=["fftip", "mftip", "rftip", "lftip", "thtip"], preserve_order=True
+        )
+        self.object = self.scene["object"]
+        self.pc = self.scene["object_point_cloud"]
+
+        print("DEBUGGING data extraction")
+        print(self.robot)
+        # general robot debugs
+        # print(self.robot.__dict__)  # internal refs
+        # print(dir(self.robot))      # method/attr names
+
+        # robot data debugs
+        # print(self.robot.data.__dict__.keys())
+        # print(self.robot.data.root_state_w)
+        print(self.robot.data.joint_names) # this is the joint order: ['FFJ4', 'LFJ5', 'MFJ4', 'RFJ4', 'THJ5', 'FFJ3', 'LFJ4', 'MFJ3', 'RFJ3', 'THJ4', 'FFJ2', 'LFJ3', 'MFJ2', 'RFJ2', 'THJ3', 'FFJ1', 'LFJ2', 'MFJ1', 'RFJ1', 'THJ2', 'LFJ1', 'THJ1']
+        
+        # print(self.object)
+        # print(self.pc)
+        # input()
+
         # self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
         # self.reward_manager = RewardManager(self.cfg.reward, self)
         # self.init_buffers()
@@ -127,9 +149,7 @@ class UniGraspTransformerEnv(VecEnv):
         self.feet_cfg = SceneEntityCfg(name="contact_sensor", body_names=self.cfg.robot.feet_body_names)
         self.feet_cfg.resolve(self.scene)
 
-        self.fingertip_ids, _ = self.robot.find_bodies(
-            name_keys=["ffdistal", "mfdistal", "rfdistal", "lfdistal", "thdistal"], preserve_order=True
-        )
+        
         
         # obstacles
         self.obs_scales = self.cfg.normalization.obs_scales
@@ -149,11 +169,100 @@ class UniGraspTransformerEnv(VecEnv):
 
     def compute_current_observations(self):
         # TODO: replace with task-specific observations for the hand.
-        current_actor_obs = torch.zeros((self.num_envs, 1), device=self.device)
+        # dim = 167 + 24 + 16 + 36 + 29
+        #       proprioception(167)
+        #           wrist position(3) and rotation(3)
+        #           Finger-joint angle(22), angular velocity(22) and force(22)
+        #           Fingertip position(5*3), quaternion rotation(5*4), linear velocity(5*3), angular velocity(5*3), force(5*3) and torque(5*3)
+        #       Previous action(24)
+        #           wrist force(3) and torque(3); finger-joint angles(18)
+        #       Object state(16)
+        #           Object center(3), quaternion rotation(4), linear velocity(3), angular velocity(3), object-goal distance(3)
+        #       Hand-Object Distance(36)
+        #           hand body points to object point cloud distances (36)
+        #       Time(29)
+        #           current time(1), sine-cosine time embedding(28)
+
+        # get raw data
+        robot_data = self.robot.data
+        object_data = self.object.data
+        previous_action = self.action_buffer
+        sim_step_counter = getattr(self, "sim_step_counter", 0)
+        sim_time = float(sim_step_counter) * float(getattr(self, "step_dt", 0.0))
+
+
+        # unpack observation from real readings
+        wrist_pos = robot_data.root_state_w[:, 0:3]
+        wrist_rot = robot_data.root_state_w[:, 3:7] # TODO: the wrist rot is in quaternion form, but the paper ask for 3 dims
+        
+        joint_angle = robot_data.joint_pos[:, :22]
+        joint_vel = robot_data.joint_vel[:, :22]
+        joint_force = robot_data.joint_measured_force[:, :22]
+        
+        body_state = self.robot.data.body_state_w  # (E, B, 13)
+        fingertip_pos = body_state[:, self.fingertip_ids, 0:3].reshape(self.num_envs, -1)  # (E, 5*3)
+        fingertip_rot = body_state[:, self.fingertip_ids, 3:7].reshape(self.num_envs, -1)  # (E, 5*4)
+        fingertip_lin_vel = body_state[:, self.fingertip_ids, 7:10].reshape(self.num_envs, -1)  # (E, 5*3)
+        fingertip_ang_vel = body_state[:, self.fingertip_ids, 10:13].reshape(self.num_envs, -1)  # (E, 5*3)
+        
+        # TODO: fingertip_force and torque can not be acquired by contact sensors, still working on how to solve it.
+        fingertip_force = torch.zeros((self.num_envs, 5 * 3), device=self.device)
+        fingertip_torque = torch.zeros((self.num_envs, 5 * 3), device=self.device)
+        proprio = torch.cat(
+            [
+                wrist_pos,
+                wrist_rot,
+                joint_angle,
+                joint_vel,
+                joint_force,
+                fingertip_pos,
+                fingertip_rot,
+                fingertip_lin_vel,
+                fingertip_ang_vel,
+                fingertip_force,
+                fingertip_torque,
+            ],
+            dim=-1,
+        )
+
+        prev_wrist_force = torch.zeros((self.num_envs, 3), device=self.device)
+        prev_wrist_torque = torch.zeros((self.num_envs, 3), device=self.device)
+        prev_finger_angles = torch.zeros((self.num_envs, 18), device=self.device)
+        prev_action = torch.cat([prev_wrist_force, 
+                                 prev_wrist_torque, 
+                                 prev_finger_angles], 
+                                 dim=-1)
+
+        obj_center = torch.zeros((self.num_envs, 3), device=self.device)
+        obj_quat = torch.zeros((self.num_envs, 4), device=self.device)
+        obj_lin_vel = torch.zeros((self.num_envs, 3), device=self.device)
+        obj_ang_vel = torch.zeros((self.num_envs, 3), device=self.device)
+        obj_goal_dist = torch.zeros((self.num_envs, 3), device=self.device)
+        object_state = torch.cat([obj_center, 
+                                  obj_quat,
+                                  obj_lin_vel,
+                                  obj_ang_vel, 
+                                  obj_goal_dist], 
+                                  dim=-1)
+
+        
+        hand_object_dist = torch.zeros((self.num_envs, 36), device=self.device)
+
+        current_time = torch.zeros((self.num_envs, 1), device=self.device)
+        time_sin_cos = torch.zeros((self.num_envs, 28), device=self.device)
+        time_embed = torch.cat([current_time, 
+                                time_sin_cos], 
+                                dim=-1)
+
+        current_actor_obs = torch.cat([proprio, prev_action, object_state, hand_object_dist, time_embed], dim=-1)
         current_critic_obs = current_actor_obs
         return current_actor_obs, current_critic_obs
 
     def compute_observations(self):
+        # a higher level observation wrapper which takes per timestep observation and add noise and sensor data
+        # in our dex grasp case, there are two modes
+        # one is purely state based policy training, you should only use the perstep observation
+        # second is vision based policy training, you should extend the perstep observation
         current_actor_obs, current_critic_obs = self.compute_current_observations()
         if self.add_noise:
             current_actor_obs += (2 * torch.rand_like(current_actor_obs) - 1) * self.noise_scale_vec
@@ -163,26 +272,7 @@ class UniGraspTransformerEnv(VecEnv):
 
         actor_obs = self.actor_obs_buffer.buffer.reshape(self.num_envs, -1)
         critic_obs = self.critic_obs_buffer.buffer.reshape(self.num_envs, -1)
-        if self.cfg.scene.height_scanner.enable_height_scan:
-            height_scan = (
-                self.height_scanner.data.pos_w[:, 2].unsqueeze(1)
-                - self.height_scanner.data.ray_hits_w[..., 2]
-                - self.cfg.normalization.height_scan_offset
-            ) * self.obs_scales.height_scan
-            critic_obs = torch.cat([critic_obs, height_scan], dim=-1)
-            if self.add_noise:
-                height_scan += (2 * torch.rand_like(height_scan) - 1) * self.height_scan_noise_vec
-            actor_obs = torch.cat([actor_obs, height_scan], dim=-1)
-
-        if self.cfg.scene.depth_camera.enable_depth_camera:
-            depth_image = self.depth_camera.data.output["distance_to_image_plane"]
-
-            # (num_envs, height, width, 1) --> (num_envs, height * width)
-            flattened_depth = depth_image.view(self.num_envs, -1)
-
-            # Append the flattened depth data to the end of the actor and critic observation vectors.
-            actor_obs = torch.cat([actor_obs, flattened_depth], dim=-1)
-            critic_obs = torch.cat([critic_obs, flattened_depth], dim=-1)
+        
 
         actor_obs = torch.clip(actor_obs, -self.clip_obs, self.clip_obs)
         critic_obs = torch.clip(critic_obs, -self.clip_obs, self.clip_obs)
@@ -226,42 +316,66 @@ class UniGraspTransformerEnv(VecEnv):
         self.sim.forward()
 
     def step(self, actions: torch.Tensor):
-        # action process
-        if self.cfg.domain_rand.action_delay.enable:
-            delayed_actions = self.action_buffer.compute(actions)
-        else:
-            delayed_actions = actions
-        self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
+        ## action process
+        # this part is for later delay and domain randomization, currently we don't need it.
+        # if self.cfg.domain_rand.action_delay.enable:
+        #     delayed_actions = self.action_buffer.compute(actions)
+        # else:
+        #     delayed_actions = actions
+        # self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
 
-        processed_actions = self.action * self.action_scale + self.robot.data.default_joint_pos
+        # processed_actions = self.action * self.action_scale + self.robot.data.default_joint_pos
 
+        # our action process
+        # Expect 24D actions: 6 (wrist force/torque placeholders) + 18 finger joints.
+        num_act = 24
+        if actions.shape[1] != num_act:
+            raise ValueError(f"action dimension mismatch: expected {num_act}, got {actions.shape[1]}")
+
+        # clip/scale 
+        # TODO: clip and scaling still not clear
+        clip_actions = getattr(self, "clip_actions", self.cfg.normalization.clip_actions)
+        action_scale = getattr(self, "action_scale", self.cfg.robot.action_scale)
+        actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
+
+        # split
+        wrist_wrench = actions[:, :6]  # fx, fy, fz, tx, ty, tz
+        finger_actions = actions[:, 6:]  # 18 finger joints
+
+        # map finger actions to joint targets; assume last 18 joints correspond to fingers
+        # TODO: figure out the unigrasptransformer action type, do they use delta action?
+        default_finger_pos = self.robot.data.default_joint_pos[:, -18:]
+        processed_finger_actions = finger_actions * action_scale + default_finger_pos
+
+        # build full joint target: keep non-finger joints at default
+        processed_actions = self.robot.data.default_joint_pos.clone()
+        processed_actions[:, -18:] = processed_finger_actions
+
+        # apply wrist wrench on the root link (body id 0) in the global frame
+        forces = torch.zeros((self.num_envs, 1, 3), device=self.device)
+        torques = torch.zeros((self.num_envs, 1, 3), device=self.device)
+        forces[:, 0, :] = wrist_wrench[:, :3]
+        torques[:, 0, :] = wrist_wrench[:, 3:]
+        
         # Apply one action over multiple physics substeps (higher-rate physics than control)
         # and accumulate fingertip contact forces/speeds for averaging.
         for _ in range(self.cfg.sim.decimation):
             self.sim_step_counter += 1
-            self.robot.set_joint_position_target(processed_actions)
+            self.robot.set_external_force_and_torque(forces=forces, torques=torques, body_ids=[0], is_global=True)
+            self.robot.set_joint_position_target(processed_actions) # 18 dim joint positions
             self.scene.write_data_to_sim()
             self.sim.step(render=False)
             self.scene.update(dt=self.physics_dt)
 
-            self.avg_feet_force_per_step += torch.norm(
-                self.contact_sensor.data.net_forces_w[:, self.feet_cfg.body_ids, :3], dim=-1
-            )
-            self.avg_feet_speed_per_step += torch.norm(self.robot.data.body_lin_vel_w[:, self.feet_body_ids, :], dim=-1)
-
-        self.avg_feet_force_per_step /= self.cfg.sim.decimation
-        self.avg_feet_speed_per_step /= self.cfg.sim.decimation
+            # TODO: contact sensor stuff I havenot figured out
+            # self.avg_feet_force_per_step += torch.norm(
+            #     self.contact_sensor.data.net_forces_w[:, self.feet_cfg.body_ids, :3], dim=-1
+            # )
 
         if not self.headless:
             self.sim.render()
 
         self.episode_length_buf += 1
-        self._calculate_gait_para()
-
-        self.command_generator.compute(self.step_dt)
-        if "interval" in self.event_manager.available_modes:
-            self.event_manager.apply(mode="interval", dt=self.step_dt)
-
         self.reset_buf, self.time_out_buf = self.check_reset()
         reward_buf = self.reward_manager.compute(self.step_dt)
         self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
@@ -329,9 +443,6 @@ class UniGraspTransformerEnv(VecEnv):
         self.extras["observations"] = {"critic": critic_obs}
         return actor_obs, self.extras
 
-    def get_amp_obs_for_expert_trans(self):
-        # AMP workflow removed for grasping; no expert obs provided.
-        raise NotImplementedError("AMP observations are not used in UniGraspTransformerEnv")
 
     @staticmethod
     def seed(seed: int = -1) -> int:

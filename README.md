@@ -234,6 +234,9 @@ assets related:
 
 - the dataset processors are hitting some linux inotify watch not enough error(should fix)
 
+- the object mesh is warned for triangular mesh, this should be a problem to be dealt with in conversion time.
+ 2025-11-26T10:01:00Z [8,708ms] [Error] [omni.physx.plugin] PhysicsUSD: Parse collision - triangle mesh collision (approximation None/MeshSimplification) cannot be a part of a dynamic body, falling back to convexHull approximation: /World/envs/env_0/Object/part_0/geometry/mesh.For dynamic collision please use approximations : convex hull, convex decomposition, box, sphere or SDF approximation.
+
 reward related:
 - Port the reference UniGraspTransformer reset/randomization logic: object/goal pose sampling with noise, hand pose noise, and domain randomization knobs.
 - Align goal/success bookkeeping and reset conditions with the reference state_based_grasp task.

@@ -25,6 +25,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim.utils import clone
 from isaaclab.sensors import ContactSensorCfg, patterns
 from isaaclab.utils import configclass
+import numpy as np
 
 from legged_lab.envs.base.my_confg import GraspObjectCfg, TableCfg
 from legged_lab.assets.shadow_hand_with_fingertip.shadow_hand import SHADOW_HAND_CFG
@@ -259,6 +260,35 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
         if robot_cfg is not None:
             self.robot: ArticulationCfg = robot_cfg
             print(f"[UniGraspSceneCfg] Robot prim: {self.robot.prim_path}")
+
+
+def get_point_cloud_world(env_index: int = 0, prim_suffix: str = "ObjectPC") -> np.ndarray:
+    """Fetch the point cloud overlay for an env in world coordinates.
+
+    Args:
+        env_index: Which environment index to read from (default: 0).
+        prim_suffix: Name of the point cloud prim under the object (default: ``ObjectPC``).
+
+    Returns:
+        An (N, 3) numpy array of points in world frame. If the prim is missing, returns an empty array.
+    """
+    import omni.usd
+    from pxr import UsdGeom
+
+    stage = omni.usd.get_context().get_stage()
+    prim_path = f"/World/envs/env_{env_index}/Object/{prim_suffix}"
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim.IsValid():
+        return np.zeros((0, 3), dtype=np.float32)
+
+    pc = UsdGeom.Points(prim)
+    pts_local = pc.GetPointsAttr().Get()
+    if not pts_local:
+        return np.zeros((0, 3), dtype=np.float32)
+
+    xf = pc.ComputeLocalToWorldTransform(omni.usd.get_context().get_time_code())
+    pts_world = [xf.Transform(p) for p in pts_local]
+    return np.array([[p[0], p[1], p[2]] for p in pts_world], dtype=np.float32)
 
 
 __all__ = ["UniGraspSceneCfg"]
