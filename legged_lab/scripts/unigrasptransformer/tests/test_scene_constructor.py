@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smoke test that instantiates UniGraspTransformerEnv and steps the sim."""
-
+# it this test is successful, then the vecEnv initialization is successful and we can count on the training pipeline to behave the same.
 from __future__ import annotations
 
 import argparse

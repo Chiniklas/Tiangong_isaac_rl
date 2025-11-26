@@ -57,10 +57,26 @@ def _spawn_point_cloud_from_npy(
     prim = UsdGeom.Points.Define(stage, prim_path)
     xform = UsdGeom.Xformable(prim)
     if translation is not None:
-        xform.AddTranslateOp().Set(Gf.Vec3f(*translation))
+        ops = xform.GetOrderedXformOps()
+        translate_op = next((op for op in ops if op.GetOpType() == UsdGeom.XformOp.TypeTranslate), None)
+        if translate_op is None:
+            translate_op = xform.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionDouble)
+        precision = translate_op.GetPrecision()
+        if precision == UsdGeom.XformOp.PrecisionDouble:
+            translate_op.Set(Gf.Vec3d(*translation))
+        else:
+            translate_op.Set(Gf.Vec3f(*translation))
     if orientation is not None:
         quat = Gf.Quatf(float(orientation[0]), float(orientation[1]), float(orientation[2]), float(orientation[3]))
-        xform.AddOrientOp().Set(quat)
+        ops = xform.GetOrderedXformOps()
+        orient_op = next((op for op in ops if op.GetOpType() == UsdGeom.XformOp.TypeOrient), None)
+        if orient_op is None:
+            orient_op = xform.AddOrientOp(precision=UsdGeom.XformOp.PrecisionDouble)
+        precision = orient_op.GetPrecision()
+        if precision == UsdGeom.XformOp.PrecisionDouble:
+            orient_op.Set(Gf.Quatd(float(orientation[0]), float(orientation[1]), float(orientation[2]), float(orientation[3])))
+        else:
+            orient_op.Set(quat)
     prim.CreateWidthsAttr([getattr(cfg, "width", 0.01)])
     prim.GetDisplayColorAttr().Set([Gf.Vec3f(*getattr(cfg, "color", (0.15, 0.85, 0.95)))])
     prim.GetPointsAttr().Set(points)
@@ -91,10 +107,26 @@ def _spawn_pca_axes_from_npy(
     root = UsdGeom.Xform.Define(stage, prim_path)
     xform = UsdGeom.Xformable(root)
     if translation is not None:
-        xform.AddTranslateOp().Set(Gf.Vec3f(*translation))
+        ops = xform.GetOrderedXformOps()
+        translate_op = next((op for op in ops if op.GetOpType() == UsdGeom.XformOp.TypeTranslate), None)
+        if translate_op is None:
+            translate_op = xform.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionDouble)
+        precision = translate_op.GetPrecision()
+        if precision == UsdGeom.XformOp.PrecisionDouble:
+            translate_op.Set(Gf.Vec3d(*translation))
+        else:
+            translate_op.Set(Gf.Vec3f(*translation))
     if orientation is not None:
         quat = Gf.Quatf(float(orientation[0]), float(orientation[1]), float(orientation[2]), float(orientation[3]))
-        xform.AddOrientOp().Set(quat)
+        ops = xform.GetOrderedXformOps()
+        orient_op = next((op for op in ops if op.GetOpType() == UsdGeom.XformOp.TypeOrient), None)
+        if orient_op is None:
+            orient_op = xform.AddOrientOp(precision=UsdGeom.XformOp.PrecisionDouble)
+        precision = orient_op.GetPrecision()
+        if precision == UsdGeom.XformOp.PrecisionDouble:
+            orient_op.Set(Gf.Quatd(float(orientation[0]), float(orientation[1]), float(orientation[2]), float(orientation[3])))
+        else:
+            orient_op.Set(quat)
 
     colors = getattr(cfg, "colors", ((1.0, 0.3, 0.3), (0.3, 1.0, 0.3), (0.3, 0.3, 1.0)))
     scale = getattr(cfg, "scale", 0.2)
@@ -147,7 +179,8 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
                     ),
                     collision_props=sim_utils.CollisionPropertiesCfg(),
                     rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                        disable_gravity=True
+                        disable_gravity=True,
+                        kinematic_enabled=True,  # keep the table fixed even when other bodies collide
                     ),
                 ),
                 init_state=RigidObjectCfg.InitialStateCfg(pos=table_cfg.pos, rot=table_cfg.rot_xyzw),
@@ -164,11 +197,14 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
                 raise ValueError("The object path is not passed down.")
 
             # spawn object usd
+            object_spawn_cfg = sim_utils.UsdFileCfg(
+                usd_path=object_cfg.object_path,
+            )
+            # Keep the object from falling under gravity before grasp; user can enable gravity later if desired.
+            object_spawn_cfg.rigid_props = sim_utils.RigidBodyPropertiesCfg(disable_gravity=False)
             self.object = AssetBaseCfg(
                 prim_path="{ENV_REGEX_NS}/Object",
-                spawn=sim_utils.UsdFileCfg(
-                    usd_path=object_cfg.object_path,
-                ),
+                spawn=object_spawn_cfg,
                 init_state=AssetBaseCfg.InitialStateCfg(pos=object_cfg.pos, rot=object_cfg.rot_xyzw),
             )
             print(f"[UniGraspSceneCfg] Object prim: {self.object.prim_path}")
@@ -183,12 +219,13 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
                     copy_from_source=False,
                 )
                 pc_cfg.npy_path = Path(pc_path).expanduser().as_posix()
-                pc_cfg.width = 0.01
+                pc_cfg.width = 0.005
                 pc_cfg.color = (0.15, 0.85, 0.95)
+                # Place overlays under the object prim; keep local pose identity to avoid double transforms.
                 self.object_point_cloud = AssetBaseCfg(
-                    prim_path="{ENV_REGEX_NS}/Object/Debug/ObjectPC",
+                    prim_path="{ENV_REGEX_NS}/Object/ObjectPC",
                     spawn=pc_cfg,
-                    init_state=AssetBaseCfg.InitialStateCfg(pos=object_cfg.pos, rot=object_cfg.rot_xyzw),
+                    init_state=AssetBaseCfg.InitialStateCfg(pos=(0,0,0), rot=(1,0,0,0)),
                 )
                 print(f"[UniGraspSceneCfg] Point cloud prim: {self.object_point_cloud.prim_path}")
 
@@ -209,9 +246,9 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
                     (0.3, 0.3, 1.0),
                 )
                 self.object_pca_axes = AssetBaseCfg(
-                    prim_path="{ENV_REGEX_NS}/Object/Debug/PCAAxes",
+                    prim_path="{ENV_REGEX_NS}/Object/PCAAxes",
                     spawn=axes_cfg,
-                    init_state=AssetBaseCfg.InitialStateCfg(pos=object_cfg.pos, rot=object_cfg.rot_xyzw),
+                    init_state=AssetBaseCfg.InitialStateCfg(pos=(0,0,0), rot=(1,0,0,0)),
                 )
                 print(f"[UniGraspSceneCfg] PCA axes prim: {self.object_pca_axes.prim_path}")
         else:

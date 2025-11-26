@@ -15,7 +15,7 @@ table:
     - 1.0
 
 object:
-  enable: false
+  enable: true
   default_dir: /home/chizhang/projects/Tiangong_isaac_rl/dataset/unigrasptransformer_asset/meshdatav3_scaled/subset_core10
   object_path: null
   size:
