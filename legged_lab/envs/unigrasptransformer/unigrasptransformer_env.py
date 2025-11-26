@@ -25,25 +25,9 @@ from scipy.spatial.transform import Rotation
 from legged_lab.envs.unigrasptransformer.dex_grasp_cfg import UnigraspTransformerGraspEnv
 from legged_lab.utils.env_utils.unigrasptransformer_scene import UniGraspSceneCfg
 from rsl_rl.env import VecEnv
-
-# Load YAML configs at import so hyperparameters are available module-wide.
-def _load_yaml_cfg(filename: str) -> Dict[str, Any]:
-    cfg_path = Path(__file__).resolve().parent / "cfg" / filename
-    try:
-        import yaml
-    except ImportError:
-        return {}
-    if not cfg_path.is_file():
-        return {}
-    content = cfg_path.read_text(encoding="utf-8")
-    if not content.strip():
-        return {}
-    try:
-        loaded = yaml.safe_load(content)
-    except Exception:
-        return {}
-    return loaded or {}
-
+from legged_lab.envs.unigrasptransformer.helpers import (
+    _load_yaml_cfg
+)
 
 SPAWN_CFG = _load_yaml_cfg("spawn_cfg.yaml")
 WEIGHTS_CFG = _load_yaml_cfg("weights_cfg.yaml")
@@ -82,7 +66,11 @@ class UniGraspTransformerEnv(VecEnv):
         self.scene = InteractiveScene(scene_cfg)
         self.sim.reset()
 
-        # extract seperate components from scene
+        # Extract live scene components. These are bound to the created scene and used for sim I/O.
+        # - self.robot: articulation API for issuing controls and reading state.
+        # - self.fingertip_ids: indices of fingertip bodies for convenience in rewards/obs.
+        # - self.object: the grasp target rigid object.
+        # - self.pc: point cloud sensor attached to the object.
         self.robot: Articulation = self.scene["robot"]
         self.fingertip_ids, _ = self.robot.find_bodies(
             name_keys=["fftip", "mftip", "rftip", "lftip", "thtip"], preserve_order=True
@@ -106,24 +94,31 @@ class UniGraspTransformerEnv(VecEnv):
         # input()
 
         # self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
-        # self.reward_manager = RewardManager(self.cfg.reward, self)
-        # self.init_buffers()
-        # env_ids = torch.arange(self.num_envs, device=self.device)
-        # self.event_manager = EventManager(self.cfg.domain_rand.events, self)
+        self.reward_manager = RewardManager(self.cfg.reward, self)
+        self.init_buffers()
+        env_ids = torch.arange(self.num_envs, device=self.device)
+        self.event_manager = EventManager(self.cfg.domain_rand.events, self)
         # if "startup" in self.event_manager.available_modes:
         #     self.event_manager.apply(mode="startup")
         # self.reset(env_ids)
 
     def init_buffers(self):
+        """
+        buffers are basicly action buffer, obs buffer, and episode length buffer
+        """
+        # Per-episode extras and bookkeeping.
         self.extras = {}
 
+        # unpack some hyperparameters
         self.max_episode_length_s = self.cfg.scene.max_episode_length_s
         self.max_episode_length = np.ceil(self.max_episode_length_s / self.step_dt)
         self.num_actions = self.robot.data.default_joint_pos.shape[1]
         self.clip_actions = self.cfg.normalization.clip_actions
         self.clip_obs = self.cfg.normalization.clip_observations
-
         self.action_scale = self.cfg.robot.action_scale
+
+        ## Action buffer initialization
+        # Action delay buffer to optionally inject latency between issued and applied actions.
         self.action_buffer = DelayBuffer(
             self.cfg.domain_rand.action_delay.params["max_delay"], self.num_envs, device=self.device
         )
@@ -131,6 +126,7 @@ class UniGraspTransformerEnv(VecEnv):
             torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         )
         if self.cfg.domain_rand.action_delay.enable:
+            # Random per-env delay drawn within configured bounds.
             time_lags = torch.randint(
                 low=self.cfg.domain_rand.action_delay.params["min_delay"],
                 high=self.cfg.domain_rand.action_delay.params["max_delay"] + 1,
@@ -140,35 +136,30 @@ class UniGraspTransformerEnv(VecEnv):
             )
             self.action_buffer.set_time_lag(time_lags, torch.arange(self.num_envs, device=self.device))
 
-        self.robot_cfg = SceneEntityCfg(name="robot")
-        self.robot_cfg.resolve(self.scene)
-        self.termination_contact_cfg = SceneEntityCfg(
-            name="contact_sensor", body_names=self.cfg.robot.terminate_contacts_body_names
-        )
-        self.termination_contact_cfg.resolve(self.scene)
-        self.feet_cfg = SceneEntityCfg(name="contact_sensor", body_names=self.cfg.robot.feet_body_names)
-        self.feet_cfg.resolve(self.scene)
-
-        
-        
-        # obstacles
-        self.obs_scales = self.cfg.normalization.obs_scales
-        self.add_noise = self.cfg.noise.add_noise
-
+        # Episode length buffer
+        # Episode and timeout tracking.
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.sim_step_counter = 0
         self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
-        # action buffer    
+        ## Observation buffer
+        # Observation noise/scales.
+        self.obs_scales = self.cfg.normalization.obs_scales
+        self.add_noise = self.cfg.noise.add_noise
+        self.init_obs_buffer()
+
+        # Resolved scene entity descriptor for the robot (ids for managers/reward terms).
+        self.robot_cfg = SceneEntityCfg(name="robot")
+        self.robot_cfg.resolve(self.scene)
+        # Latest applied (clipped) action.
         self.action = torch.zeros(
             self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False
         )
-        self.init_obs_buffer()
 
     
 
     def compute_current_observations(self):
-        # TODO: replace with task-specific observations for the hand.
+        # TODO: check each observation domain to make sure they have the right reading
         # dim = 167 + 24 + 16 + 36 + 29
         #       proprioception(167)
         #           wrist position(3) and rotation(3)
@@ -284,14 +275,15 @@ class UniGraspTransformerEnv(VecEnv):
             return
 
         # Reset buffer
-        self.avg_feet_force_per_step[env_ids] = 0.0
-        self.avg_feet_speed_per_step[env_ids] = 0.0
-
         self.extras["log"] = dict()
-        if self.cfg.scene.terrain_generator is not None:
-            if self.cfg.scene.terrain_generator.curriculum:
-                terrain_levels = self.update_terrain_levels(env_ids)
-                self.extras["log"].update(terrain_levels)
+
+        # TODO: mirror upstream UniGraspTransformer reset:
+        # - Randomize goal pose / target pose (goal_env_ids handling)
+        # - Sample grasp priors / target hand poses if available
+        # - Reset hand DOF state/targets to defaults (with optional noise)
+        # - Restore saved root states for hand/object/table
+        # - Apply random object yaw and align hand orientation (optionally to PCA)
+        # - Apply static init states if configured
 
         self.scene.reset(env_ids)
         if "reset" in self.event_manager.available_modes:
@@ -306,7 +298,6 @@ class UniGraspTransformerEnv(VecEnv):
         self.extras["log"].update(reward_extras)
         self.extras["time_outs"] = self.time_out_buf
 
-        self.command_generator.reset(env_ids)
         self.actor_obs_buffer.reset(env_ids)
         self.critic_obs_buffer.reset(env_ids)
         self.action_buffer.reset(env_ids)
@@ -361,7 +352,9 @@ class UniGraspTransformerEnv(VecEnv):
         # and accumulate fingertip contact forces/speeds for averaging.
         for _ in range(self.cfg.sim.decimation):
             self.sim_step_counter += 1
+            # apply force and torque control on the palm
             self.robot.set_external_force_and_torque(forces=forces, torques=torques, body_ids=[0], is_global=True)
+            # apply position control on the joints
             self.robot.set_joint_position_target(processed_actions) # 18 dim joint positions
             self.scene.write_data_to_sim()
             self.sim.step(render=False)

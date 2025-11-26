@@ -21,3 +21,4 @@
 from isaaclab.envs.mdp import *
 
 from .rewards import *
+from .rewards_unigrasptransformer import *

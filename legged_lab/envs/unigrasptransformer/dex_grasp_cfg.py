@@ -77,6 +77,32 @@ SPAWN_CFG = _load_yaml_cfg("spawn_cfg.yaml")
 WEIGHTS_CFG = _load_yaml_cfg("weights_cfg.yaml")
 PPO_CFG = _load_yaml_cfg("ppo_cfg.yaml")
 
+# Validate required reward weights exist in the YAML; surface a clear error early.
+REQUIRED_WEIGHT_KEYS = [
+    "hold_flag",
+    "delta_init_qpos_value",
+    "right_hand_dist",
+    "delta_target_hand_pca",
+    "right_hand_exploration_dist",
+    "right_hand_body_dist",
+    "right_hand_joint_dist",
+    "right_hand_finger_dist",
+    "right_hand_dist_post",
+    "goal_dist",
+    "goal_rew",
+    "hand_up",
+    "bonus",
+    "right_hand_pose",
+    "rd",
+    "ro",
+    "rl",
+    "rg",
+    "rs",
+]
+missing_weights = [key for key in REQUIRED_WEIGHT_KEYS if key not in WEIGHTS_CFG]
+if missing_weights:
+    raise KeyError(f"weights_cfg.yaml is missing required keys: {missing_weights}")
+
 # isolate hyperparameters for three items from spawn_cfg
 DEFAULT_TABLE_SPAWN = _build_table_spawn(SPAWN_CFG)
 DEFAULT_OBJECT_SPAWN = _build_object_spawn(SPAWN_CFG)
@@ -115,8 +141,32 @@ class UnigraspTransformerSceneCfg(MySceneCfg):
     
 @configclass
 class GraspRewardCfg:
-    # this is the part where you implement reward configs
-    pass
+    """Placeholder for reward terms broken out by phase; fill weights/params when ready."""
+
+    # pre-hold phase init_reward
+    hold_flag = RewTerm(func=mdp.grasp_hold_flag, weight=WEIGHTS_CFG["hold_flag"])
+    delta_init_qpos_value = RewTerm(func=mdp.grasp_delta_init_qpos, weight=WEIGHTS_CFG["delta_init_qpos_value"])
+    right_hand_dist = RewTerm(func=mdp.grasp_right_hand_dist, weight=WEIGHTS_CFG["right_hand_dist"])
+    delta_target_hand_pca = RewTerm(func=mdp.grasp_delta_target_hand_pca, weight=WEIGHTS_CFG["delta_target_hand_pca"])
+    right_hand_exploration_dist = RewTerm(func=mdp.grasp_right_hand_exploration_dist, weight=WEIGHTS_CFG["right_hand_exploration_dist"])
+
+    # post-hold phase grasp_reward
+    right_hand_body_dist = RewTerm(func=mdp.grasp_right_hand_body_dist, weight=WEIGHTS_CFG["right_hand_body_dist"])
+    right_hand_joint_dist = RewTerm(func=mdp.grasp_right_hand_joint_dist, weight=WEIGHTS_CFG["right_hand_joint_dist"])
+    right_hand_finger_dist = RewTerm(func=mdp.grasp_right_hand_finger_dist, weight=WEIGHTS_CFG["right_hand_finger_dist"])
+    right_hand_dist_post = RewTerm(func=mdp.grasp_reward_rd, weight=WEIGHTS_CFG["right_hand_dist_post"])
+    goal_dist = RewTerm(func=mdp.grasp_goal_dist, weight=WEIGHTS_CFG["goal_dist"])
+    goal_rew = RewTerm(func=mdp.grasp_goal_rew, weight=WEIGHTS_CFG["goal_rew"])
+    hand_up = RewTerm(func=mdp.grasp_hand_up, weight=WEIGHTS_CFG["hand_up"])
+    bonus = RewTerm(func=mdp.grasp_bonus, weight=WEIGHTS_CFG["bonus"])
+    right_hand_pose = RewTerm(func=mdp.grasp_right_hand_pose, weight=WEIGHTS_CFG["right_hand_pose"])
+
+    # paper placeholders (keep explicit)
+    rd = RewTerm(func=mdp.grasp_reward_rd, weight=WEIGHTS_CFG["rd"])
+    ro = RewTerm(func=mdp.grasp_reward_ro, weight=WEIGHTS_CFG["ro"])
+    rl = RewTerm(func=mdp.grasp_reward_rl, weight=WEIGHTS_CFG["rl"])
+    rg = RewTerm(func=mdp.grasp_reward_rg, weight=WEIGHTS_CFG["rg"])
+    rs = RewTerm(func=mdp.grasp_reward_rs, weight=WEIGHTS_CFG["rs"])
 
 @configclass
 class UnigraspTransformerGraspEnv:

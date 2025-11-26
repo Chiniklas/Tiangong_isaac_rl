@@ -269,3 +269,21 @@ def _build_hand_cfg(hand_spawn: Dict[str, Any], hand_cfg: ArticulationCfg) -> Ar
     # print(hand_cfg)
     # input()
     return hand_cfg
+
+# Load YAML configs at import so hyperparameters are available module-wide.
+def _load_yaml_cfg(filename: str) -> Dict[str, Any]:
+    cfg_path = Path(__file__).resolve().parent / "cfg" / filename
+    try:
+        import yaml
+    except ImportError:
+        return {}
+    if not cfg_path.is_file():
+        return {}
+    content = cfg_path.read_text(encoding="utf-8")
+    if not content.strip():
+        return {}
+    try:
+        loaded = yaml.safe_load(content)
+    except Exception:
+        return {}
+    return loaded or {}

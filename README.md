@@ -243,4 +243,18 @@ reward related:
 - Address Isaac Sim contact sensing gaps: add robust per-fingertip 6D force/torque sensing (PhysX contact or force sensors) instead of zeroed fingertip force inputs.
 
 pipeline related:
-the spawning pipeline is always off, I need to fix it.
+the training pipeline need to be tested
+
+Overall TODOs: 20251126
+1- simulation:
+  1.1 step() needs to be tested
+
+2- Observation:
+  2.1 Observation is implemented but need to be tested to see if the output is good
+
+3- reward:
+  3.1 reward placeholders are ready
+  3.2 reward output should be tested
+
+4- reset()
+  4.1 reset() needs to be implemented and tested
