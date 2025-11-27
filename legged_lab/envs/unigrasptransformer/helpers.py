@@ -3,6 +3,8 @@ import random
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import torch
+
 from legged_lab.envs.base.my_confg import GraspObjectCfg, TableCfg
 import json
 import random
@@ -11,7 +13,128 @@ from typing import Any, Dict, Optional
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets.articulation import ArticulationCfg
+from isaaclab.utils.math import quat_apply
 from legged_lab.envs.base.my_confg import GraspObjectCfg, TableCfg
+import numpy as np
+import omni.usd
+from pxr import UsdGeom, Gf, Usd
+
+
+def compute_time_encoding(time: torch.Tensor, dimension: int) -> torch.Tensor:
+    """Sinusoidal time/positional encoding (Transformer style).
+
+    Args:
+        time: Tensor of shape (N,) with time steps / progress values.
+        dimension: Output embedding dimension (even number recommended).
+
+    Returns:
+        Tensor of shape (N, dimension) with sin/cos encodings.
+    """
+    div_term = torch.arange(0, dimension, 2, dtype=torch.float32, device=time.device)
+    div_term = torch.exp(div_term * -(torch.log(torch.tensor(10000.0, device=time.device)) / dimension)).unsqueeze(0)
+    encoding = torch.zeros(time.shape[0], dimension, device=time.device)
+    encoding[:, 0::2] = torch.sin(time.unsqueeze(1) * div_term)
+    encoding[:, 1::2] = torch.cos(time.unsqueeze(1) * div_term)
+    return encoding
+
+
+def quat_to_euler_xyz(quat: torch.Tensor) -> torch.Tensor:
+    """Convert quaternion (xyzw) to Euler XYZ angles.
+
+    Args:
+        quat: (..., 4) tensor in xyzw order.
+
+    Returns:
+        (..., 3) tensor of Euler angles (roll, pitch, yaw).
+    """
+    x, y, z, w = quat.unbind(-1)
+    t0 = 2.0 * (w * x + y * z)
+    t1 = 1.0 - 2.0 * (x * x + y * y)
+    roll = torch.atan2(t0, t1)
+
+    t2 = 2.0 * (w * y - z * x)
+    t2_clamped = torch.clamp(t2, -1.0, 1.0)
+    pitch = torch.asin(t2_clamped)
+
+    t3 = 2.0 * (w * z + x * y)
+    t4 = 1.0 - 2.0 * (y * y + z * z)
+    yaw = torch.atan2(t3, t4)
+
+    return torch.stack((roll, pitch, yaw), dim=-1)
+
+
+def batch_sided_distance(sources: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """Compute sided distance from sources (Nenv, Ns, 3) to nearest target (Nenv, Nt, 3)."""
+    pairwise_distances = torch.cdist(sources, targets)
+    distances, _ = torch.min(pairwise_distances, dim=-1)
+    return distances
+
+
+def compute_hand_body_pos(hand_joint_pos: torch.Tensor, hand_joint_rot: torch.Tensor) -> torch.Tensor:
+    """Compute hand body points from joint positions/rotations (matches UniGrasp offset scheme)."""
+    device = hand_joint_pos.device
+    num_envs = hand_joint_pos.shape[0]
+    hand_body_pos = []
+    for n in range(hand_joint_rot.shape[1]):
+        if n in [2, 5, 8, 12]:
+            continue
+        elif n == 0:
+            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([1, 0, 0], device=device).repeat(num_envs, 1) * 0.03) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
+            hand_body_pos.append(body_pos)
+            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([-1, 0, 0], device=device).repeat(num_envs, 1) * 0.03) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
+            hand_body_pos.append(body_pos)
+            
+            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.03) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
+            hand_body_pos.append(body_pos)
+            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.06) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
+            hand_body_pos.append(body_pos)
+
+            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([1, 0, 0], device=device).repeat(num_envs, 1) * 0.03) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.06) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
+            hand_body_pos.append(body_pos)
+
+            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([1, 0, 0], device=device).repeat(num_envs, 1) * 0.015) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.015) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
+            hand_body_pos.append(body_pos)
+
+            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([-1, 0, 0], device=device).repeat(num_envs, 1) * 0.03) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.03) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
+            hand_body_pos.append(body_pos)
+
+        elif n == 10:
+            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.02) \
+                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([-1, 0, 0], device=device).repeat(num_envs, 1) * 0.015)
+            hand_body_pos.append(body_pos)
+        else:
+            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.02)
+            hand_body_pos.append(body_pos)
+    
+    hand_body_pos = torch.stack(hand_body_pos, dim=1)
+    hand_body_pos = torch.cat([hand_body_pos, hand_joint_pos], dim=1)
+    return hand_body_pos
+
+
+def get_point_cloud_world(env_index: int = 0, prim_suffix: str = "ObjectPC") -> np.ndarray:
+    """Fetch the spawned point cloud overlay for an env in world coordinates."""
+    stage = omni.usd.get_context().get_stage()
+    prim_path = f"/World/envs/env_{env_index}/Object/{prim_suffix}"
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim.IsValid():
+        return np.zeros((0, 3), dtype=np.float32)
+    pc = UsdGeom.Points(prim)
+    pts_local = pc.GetPointsAttr().Get()
+    if not pts_local:
+        return np.zeros((0, 3), dtype=np.float32)
+    xf = pc.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    pts_world = [xf.Transform(p) for p in pts_local]
+    return np.array([[p[0], p[1], p[2]] for p in pts_world], dtype=np.float32)
 
 def _load_yaml_cfg(filename: str) -> Dict[str, Any]:
     # load hyperparameters from yaml
@@ -270,20 +393,30 @@ def _build_hand_cfg(hand_spawn: Dict[str, Any], hand_cfg: ArticulationCfg) -> Ar
     # input()
     return hand_cfg
 
-# Load YAML configs at import so hyperparameters are available module-wide.
-def _load_yaml_cfg(filename: str) -> Dict[str, Any]:
-    cfg_path = Path(__file__).resolve().parent / "cfg" / filename
-    try:
-        import yaml
-    except ImportError:
-        return {}
-    if not cfg_path.is_file():
-        return {}
-    content = cfg_path.read_text(encoding="utf-8")
-    if not content.strip():
-        return {}
-    try:
-        loaded = yaml.safe_load(content)
-    except Exception:
-        return {}
-    return loaded or {}
+def get_point_cloud_world(env_index: int = 0, prim_suffix: str = "ObjectPC") -> np.ndarray:
+    """Fetch the point cloud overlay for an env in world coordinates.
+
+    Args:
+        env_index: Which environment index to read from (default: 0).
+        prim_suffix: Name of the point cloud prim under the object (default: ``ObjectPC``).
+
+    Returns:
+        An (N, 3) numpy array of points in world frame. If the prim is missing, returns an empty array.
+    """
+    import omni.usd
+    from pxr import UsdGeom, Usd
+
+    stage = omni.usd.get_context().get_stage()
+    prim_path = f"/World/envs/env_{env_index}/Object/{prim_suffix}"
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim.IsValid():
+        return np.zeros((0, 3), dtype=np.float32)
+
+    pc = UsdGeom.Points(prim)
+    pts_local = pc.GetPointsAttr().Get()
+    if not pts_local:
+        return np.zeros((0, 3), dtype=np.float32)
+
+    xf = pc.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    pts_world = [xf.Transform(p) for p in pts_local]
+    return np.array([[p[0], p[1], p[2]] for p in pts_world], dtype=np.float32)

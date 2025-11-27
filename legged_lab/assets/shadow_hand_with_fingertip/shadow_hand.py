@@ -69,6 +69,31 @@ REFERENCE_PD = {
     "effort": 1.0,
 }
 
+# Mimic joints (FFJ1/MFJ1/RFJ1/LFJ1) follow their proximal counterparts in the URDF,
+# so actuators should target only the 18 actively driven joints.
+ACTIVE_JOINTS = [
+    # Fingers (exclude distal mimic joints)
+    "FFJ4",
+    "FFJ3",
+    "FFJ2",
+    "MFJ4",
+    "MFJ3",
+    "MFJ2",
+    "RFJ4",
+    "RFJ3",
+    "RFJ2",
+    "LFJ5",
+    "LFJ4",
+    "LFJ3",
+    "LFJ2",
+    # Thumb
+    "THJ5",
+    "THJ4",
+    "THJ3",
+    "THJ2",
+    "THJ1",
+]
+
 SHADOW_HAND_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Hand",
     spawn=sim_utils.UsdFileCfg(
@@ -103,7 +128,7 @@ SHADOW_HAND_CFG = ArticulationCfg(
             stiffness=REFERENCE_PD["stiffness"],
             damping=REFERENCE_PD["damping"],
         )
-        for name in TARGET_INIT_JOINT_POS.keys()
+        for name in ACTIVE_JOINTS
     },
 )
 

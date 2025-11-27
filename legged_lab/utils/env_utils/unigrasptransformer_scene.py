@@ -197,16 +197,15 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
             elif not object_cfg.object_path:
                 raise ValueError("The object path is not passed down.")
 
-            # spawn object usd
+            # spawn object as a rigid body so pose/vel data is available
             object_spawn_cfg = sim_utils.UsdFileCfg(
                 usd_path=object_cfg.object_path,
             )
-            # Keep the object from falling under gravity before grasp; user can enable gravity later if desired.
             object_spawn_cfg.rigid_props = sim_utils.RigidBodyPropertiesCfg(disable_gravity=False)
-            self.object = AssetBaseCfg(
+            self.object = RigidObjectCfg(
                 prim_path="{ENV_REGEX_NS}/Object",
                 spawn=object_spawn_cfg,
-                init_state=AssetBaseCfg.InitialStateCfg(pos=object_cfg.pos, rot=object_cfg.rot_xyzw),
+                init_state=RigidObjectCfg.InitialStateCfg(pos=object_cfg.pos, rot=object_cfg.rot_xyzw),
             )
             print(f"[UniGraspSceneCfg] Object prim: {self.object.prim_path}")
 
@@ -262,33 +261,7 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
             print(f"[UniGraspSceneCfg] Robot prim: {self.robot.prim_path}")
 
 
-def get_point_cloud_world(env_index: int = 0, prim_suffix: str = "ObjectPC") -> np.ndarray:
-    """Fetch the point cloud overlay for an env in world coordinates.
 
-    Args:
-        env_index: Which environment index to read from (default: 0).
-        prim_suffix: Name of the point cloud prim under the object (default: ``ObjectPC``).
-
-    Returns:
-        An (N, 3) numpy array of points in world frame. If the prim is missing, returns an empty array.
-    """
-    import omni.usd
-    from pxr import UsdGeom
-
-    stage = omni.usd.get_context().get_stage()
-    prim_path = f"/World/envs/env_{env_index}/Object/{prim_suffix}"
-    prim = stage.GetPrimAtPath(prim_path)
-    if not prim.IsValid():
-        return np.zeros((0, 3), dtype=np.float32)
-
-    pc = UsdGeom.Points(prim)
-    pts_local = pc.GetPointsAttr().Get()
-    if not pts_local:
-        return np.zeros((0, 3), dtype=np.float32)
-
-    xf = pc.ComputeLocalToWorldTransform(omni.usd.get_context().get_time_code())
-    pts_world = [xf.Transform(p) for p in pts_local]
-    return np.array([[p[0], p[1], p[2]] for p in pts_world], dtype=np.float32)
 
 
 __all__ = ["UniGraspSceneCfg"]
