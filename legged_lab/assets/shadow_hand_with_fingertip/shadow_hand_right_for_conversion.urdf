@@ -270,6 +270,7 @@
     <!-- standard distal joint -->
     <limit effort="2" lower="0" upper="1.57079632679" velocity="2.0"/>
     <dynamics damping="0.1"/>
+    <mimic joint="FFJ2" multiplier="1.142199" offset="0"/> <!--tendon behavior -->
   </joint>
   <link name="fftip">
     <inertial>
@@ -403,6 +404,7 @@
     <!-- standard distal joint -->
     <limit effort="2" lower="0" upper="1.57079632679" velocity="2.0"/>
     <dynamics damping="0.1"/>
+    <mimic joint="MFJ2" multiplier="1.142199" offset="0"/><!-- standard distal joint -->
   </joint>
   <link name="mftip">
     <inertial>
@@ -536,6 +538,7 @@
     <!-- standard distal joint -->
     <limit effort="2" lower="0" upper="1.57079632679" velocity="2.0"/>
     <dynamics damping="0.1"/>
+    <mimic joint="RFJ2" multiplier="1.142199" offset="0"/><!-- standard distal joint -->
   </joint>
   <link name="rftip">
     <inertial>
@@ -696,6 +699,7 @@
     <!-- standard distal joint -->
     <limit effort="2" lower="0" upper="1.57079632679" velocity="2.0"/>
     <dynamics damping="0.1"/>
+    <mimic joint="LFJ2" multiplier="1.142199" offset="0"/><!-- standard distal joint -->
   </joint>
   <link name="lftip">
     <inertial>
