@@ -85,14 +85,8 @@ class UniGraspTransformerEnv(VecEnv):
         )
         self.object = self.scene["object"]
 
-        # initialization of hand points and object pc (need to be updated at each step)
-        pts = get_hand_points_world(env_index=None)  # returns (E,N,3) if shapes match, else list
-        self.hand_points = torch.as_tensor(pts, device=self.device, dtype=torch.float32)
-        print(f"Hand points loaded from stage directly: {self.hand_points.shape}")
-        
-        pc_np = get_point_cloud_world(env_index=None, prim_suffix="ObjectPC")  # (E,P,3) numpy
-        self.object_points = torch.as_tensor(pc_np, device=self.device, dtype=torch.float32)
-        print(f"Point cloud loaded from USD overlay: {self.object_points.shape}")
+        # initialization of hand points and object pc; refreshed each step from stage
+        self.refresh_stage_points()
 
         #TODO: get point cloud local and from real overlay, check if they are the same, if yes, then point cloud data importing is successful
         # option1: get point cloud from pc overlay (per env)
@@ -167,15 +161,32 @@ class UniGraspTransformerEnv(VecEnv):
         # print(self.pc)
         # input()
 
-        # TODO: figure out the initialization of these features below
         # self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
         self.reward_manager = RewardManager(self.cfg.reward, self)
         self.init_buffers()
         env_ids = torch.arange(self.num_envs, device=self.device)
-        # self.event_manager = EventManager(self.cfg.domain_rand.events, self)
-        # if "startup" in self.event_manager.available_modes:
-        #     self.event_manager.apply(mode="startup")
-        # self.reset(env_ids)
+        self.event_manager = EventManager(self.cfg.domain_rand.events, self)
+        if "startup" in self.event_manager.available_modes:
+            self.event_manager.apply(mode="startup")
+        self.reset(env_ids)
+
+        print("INITIALIZATION SUCCESSFUL!")
+
+    def refresh_stage_points(self):
+        """Refresh hand points and object point cloud from the USD stage (per env)."""
+        hand_pts = get_hand_points_world(env_index=None)
+        if isinstance(hand_pts, list):
+            shapes = {p.shape for p in hand_pts}
+            raise ValueError(f"Hand point counts differ across envs; shapes: {shapes}")
+        self.hand_points = torch.as_tensor(hand_pts, device=self.device, dtype=torch.float32)
+        print(f"Hand points loaded from stage directly: {self.hand_points.shape}")
+
+        pc_np = get_point_cloud_world(env_index=None, prim_suffix="ObjectPC")
+        if isinstance(pc_np, list):
+            shapes = {p.shape for p in pc_np}
+            raise ValueError(f"Point cloud counts differ across envs; shapes: {shapes}")
+        self.object_points = torch.as_tensor(pc_np, device=self.device, dtype=torch.float32)
+        print(f"Point cloud loaded from USD overlay: {self.object_points.shape}")
 
     def init_buffers(self):
         """
@@ -187,7 +198,7 @@ class UniGraspTransformerEnv(VecEnv):
         # unpack some hyperparameters
         self.max_episode_length_s = self.cfg.scene.max_episode_length_s
         self.max_episode_length = np.ceil(self.max_episode_length_s / self.step_dt)
-        self.num_actions = self.robot.data.default_joint_pos.shape[1]
+        self.num_actions = 24
         self.clip_actions = self.cfg.normalization.clip_actions
         self.clip_obs = self.cfg.normalization.clip_observations
         self.action_scale = self.cfg.robot.action_scale
@@ -423,6 +434,7 @@ class UniGraspTransformerEnv(VecEnv):
         self.sim.forward()
 
     def step(self, actions: torch.Tensor):
+        # TODO: the control strategy is a bit off from the original unigrasptransformer
         ## action process
         # this part is for later delay and domain randomization, currently we don't need it.
         # if self.cfg.domain_rand.action_delay.enable:
@@ -487,11 +499,15 @@ class UniGraspTransformerEnv(VecEnv):
         if not self.headless:
             self.sim.render()
 
+        # data buffer processing
         self.episode_length_buf += 1
         self.reset_buf, self.time_out_buf = self.check_reset()
         reward_buf = self.reward_manager.compute(self.step_dt)
         self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset(self.reset_env_ids)
+
+        # refresh stage-derived object point cloud and hand points each control step
+        self.refresh_stage_points()
 
         actor_obs, critic_obs = self.compute_observations()
         self.extras["observations"] = {"critic": critic_obs}

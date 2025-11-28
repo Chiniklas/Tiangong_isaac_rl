@@ -195,6 +195,6 @@ class PhysxCfg:
 
 @configclass
 class SimCfg:
-    dt: float = 0.005
-    decimation: int = 4
+    dt: float = 1/60 # default = 0.005
+    decimation: int = 1 # 1 for no downsampling, 2 for 2 times downsampling, 4 for 4 times downsampling
     physx: PhysxCfg = PhysxCfg()

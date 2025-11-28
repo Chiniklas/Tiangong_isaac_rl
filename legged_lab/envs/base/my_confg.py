@@ -59,4 +59,8 @@ class GraspObjectCfg:
     # pca axes related features
     show_pca_axes: bool = False
     pca_axes_path: str | None = None
+
+@configclass
+class GraspObsScaleCfg:
+    pass
     

@@ -59,7 +59,8 @@ from legged_lab.envs.base.my_confg import(
     DexHandCfg,
     MySceneCfg,
     TableCfg,
-    GraspObjectCfg
+    GraspObjectCfg,
+    GraspObsScaleCfg
 )
 
 from legged_lab.envs.unigrasptransformer.helpers import(
@@ -188,23 +189,17 @@ class UnigraspTransformerGraspEnv:
 
     reward = GraspRewardCfg()
     
-    # this part I don't know what use of it yet
+    # TODO: to be finetuned, there are richer options in the original unigrasptransformer
+    # domain randomization adds noise and delay to action 
     domain_rand: DomainRandCfg = DomainRandCfg(action_delay=ActionDelayCfg(enable=False))
     noise: NoiseCfg = NoiseCfg(add_noise=False)
+    # normalization clips observation and add noise to obs if enabled
     normalization: NormalizationCfg = NormalizationCfg(
-        obs_scales=ObsScalesCfg(
-            lin_vel=1.0,
-            ang_vel=1.0,
-            projected_gravity=1.0,
-            commands=1.0,
-            joint_pos=1.0,
-            joint_vel=1.0,
-            actions=1.0,
-            height_scan=1.0,
+        obs_scales=GraspObsScaleCfg(
+            # to be implemented
         ),
-        clip_observations=100.0,
-        clip_actions=100.0,
-        height_scan_offset=0.5,
+        clip_observations=5.0,
+        clip_actions=1.0,
     )
     # ============================
     sim: SimCfg = SimCfg()
@@ -213,51 +208,46 @@ class UnigraspTransformerGraspEnv:
 class UnigraspTransformerAgentCfg(RslRlOnPolicyRunnerCfg):
     seed = 42
     device = "cuda:0"
-    num_steps_per_env = 24
-    max_iterations = 50000
+    num_steps_per_env = 8  # match original UniGrasp PPO nsteps
+    max_iterations = 10000
     empirical_normalization = False
+
     policy = RslRlPpoActorCriticCfg(
         class_name="ActorCritic",
-        init_noise_std=1.0,
+        init_noise_std=0.8,
         noise_std_type="scalar",
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
+        actor_hidden_dims=[1024, 1024, 512, 512],
+        critic_hidden_dims=[1024, 1024, 512, 512],
         activation="elu",
     )
+
     algorithm = RslRlPpoAlgorithmCfg(
-        class_name="AMPPPO",
+        class_name="PPO",
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.005,
+        entropy_coef=0.0,
         num_learning_epochs=5,
         num_mini_batches=4,
-        learning_rate=1.0e-3,
+        learning_rate=3.0e-4,
         schedule="adaptive",
-        gamma=0.99,
+        gamma=0.96,
         lam=0.95,
-        desired_kl=0.01,
+        desired_kl=0.016,
         max_grad_norm=1.0,
         normalize_advantage_per_mini_batch=False,
-        symmetry_cfg=None,  # RslRlSymmetryCfg()
-        rnd_cfg=None,  # RslRlRndCfg()
+        symmetry_cfg=None,
+        rnd_cfg=None,
     )
-    clip_actions = None
-    save_interval = 100
-    runner_class_name = "AmpOnPolicyRunner"
-    experiment_name = "walk"
+
+    clip_actions = 1.0
+    save_interval = 1000
+    runner_class_name = "OnPolicyRunner"
+    experiment_name = "unigrasptransformer_recreate"
     run_name = ""
     logger = "tensorboard"
-    neptune_project = "walk"
-    wandb_project = "walk"
+    neptune_project = "unigrasptransformer_recreate"
+    wandb_project = "unigrasptransformer_recreate"
     resume = False
     load_run = ".*"
     load_checkpoint = "model_.*.pt"
-
-    # amp parameter
-    amp_reward_coef = 0.3
-    amp_motion_files = ["legged_lab/envs/tienkung/datasets/motion_amp_expert/walk.txt"]
-    amp_num_preload_transitions = 200000
-    amp_task_reward_lerp = 0.7
-    amp_discr_hidden_dims = [1024, 512, 256]
-    min_normalized_std = [0.05] * 20
