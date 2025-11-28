@@ -435,15 +435,19 @@ class UniGraspTransformerEnv(VecEnv):
 
     def step(self, actions: torch.Tensor):
         # TODO: the control strategy is a bit off from the original unigrasptransformer
-        ## action process
-        # this part is for later delay and domain randomization, currently we don't need it.
-        # if self.cfg.domain_rand.action_delay.enable:
-        #     delayed_actions = self.action_buffer.compute(actions)
-        # else:
-        #     delayed_actions = actions
-        # self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
+        # Expect 24D actions: 6 (wrist force/torque placeholders) + 18 finger joints.
+        num_act = 24
+        if actions.shape[1] != num_act:
+            raise ValueError(f"action dimension mismatch: expected {num_act}, got {actions.shape[1]}")
+        
+        # action process
+        if self.cfg.domain_rand.action_delay.enable:
+            delayed_actions = self.action_buffer.compute(actions)
+        else:
+            delayed_actions = actions
+        self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
 
-        # processed_actions = self.action * self.action_scale + self.robot.data.default_joint_pos
+        processed_actions = self.action * self.action_scale + self.robot.data.default_joint_pos
 
         # our action process
         # Expect 24D actions: 6 (wrist force/torque placeholders) + 18 finger joints.
@@ -571,3 +575,40 @@ class UniGraspTransformerEnv(VecEnv):
         except ModuleNotFoundError:
             pass
         return torch_utils.set_seed(seed)
+    
+    def calculate_real_action(self, action):
+        """
+        Map normalized policy actions to wrist wrench + joint targets.
+
+        Mimics original UniGrasp control:
+        - If use_relative_control is True: integrate deltas with a speed scale.
+        - Otherwise: direct position targets around defaults (scaled).
+        """
+        use_relative = getattr(self.cfg.robot, "use_relative_control", False)
+        dof_speed_scale = getattr(self.cfg.robot, "dof_speed_scale", 1.0)
+
+        wrist = action[:, :6]
+        finger = action[:, 6:]
+
+        # default and limits
+        default_finger_pos = self.robot.data.default_joint_pos[:, -18:]
+        joint_lower = getattr(self.robot.data, "joint_lower_limits", None)
+        joint_upper = getattr(self.robot.data, "joint_upper_limits", None)
+
+        if use_relative:
+            # integrate deltas
+            if not hasattr(self, "prev_joint_targets"):
+                self.prev_joint_targets = default_finger_pos.clone()
+            delta = finger * dof_speed_scale * self.step_dt
+            joint_targets = self.prev_joint_targets + delta
+            # clamp if limits available
+            if joint_lower is not None and joint_upper is not None:
+                joint_targets = torch.clamp(joint_targets, joint_lower[:, -18:], joint_upper[:, -18:])
+            self.prev_joint_targets = joint_targets.detach()
+        else:
+            # direct targets around defaults with action_scale
+            joint_targets = finger * self.action_scale + default_finger_pos
+            if joint_lower is not None and joint_upper is not None:
+                joint_targets = torch.clamp(joint_targets, joint_lower[:, -18:], joint_upper[:, -18:])
+
+        return wrist, joint_targets
