@@ -70,71 +70,142 @@ def batch_sided_distance(sources: torch.Tensor, targets: torch.Tensor) -> torch.
     return distances
 
 
-def compute_hand_body_pos(hand_joint_pos: torch.Tensor, hand_joint_rot: torch.Tensor) -> torch.Tensor:
-    """Compute hand body points from joint positions/rotations (matches UniGrasp offset scheme)."""
-    device = hand_joint_pos.device
-    num_envs = hand_joint_pos.shape[0]
-    hand_body_pos = []
-    for n in range(hand_joint_rot.shape[1]):
-        if n in [2, 5, 8, 12]:
-            continue
-        elif n == 0:
-            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([1, 0, 0], device=device).repeat(num_envs, 1) * 0.03) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
-            hand_body_pos.append(body_pos)
-            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([-1, 0, 0], device=device).repeat(num_envs, 1) * 0.03) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
-            hand_body_pos.append(body_pos)
-            
-            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.03) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
-            hand_body_pos.append(body_pos)
-            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.06) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
-            hand_body_pos.append(body_pos)
+def define_hand_points():
+    """Return ordered body names and offset definitions used for hand point sampling.
 
-            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([1, 0, 0], device=device).repeat(num_envs, 1) * 0.03) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.06) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
-            hand_body_pos.append(body_pos)
+    The offsets mirror the original UniGrasp scheme:
+    - `palm`: fan of 7 offsets (two lateral, four along +Z, one diagonal).
+    - skip bodies (middle links): no offsets; origin only.
+    - `lfmetacarpal` special offset.
+    - all other valid bodies: one +Z offset.
 
-            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([1, 0, 0], device=device).repeat(num_envs, 1) * 0.015) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.015) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
-            hand_body_pos.append(body_pos)
+    Returns:
+        valid_names: list of body names in the expected order.
+        offset_map: dict name -> list of offset tuples (meters) in local frame.
+        skip_set: set of indices within valid_names that have no offsets.
+    """
+    valid_names = [
+        "palm",
+        "ffproximal", "ffmiddle", "ffdistal",
+        "mfproximal", "mfmiddle", "mfdistal",
+        "rfknuckle", "rfmiddle", "rfdistal",
+        "lfmetacarpal", "lfknuckle", "lfmiddle", "lfdistal",
+        "thbase", "thhub", "thdistal",
+    ]
+    skip_indices = {2, 5, 8, 12}  # middle links
+    offset_map = {
+        "palm": [
+            (0.03, -0.005, 0.0),
+            (-0.03, -0.005, 0.0),
+            (0.0, -0.005, 0.03),
+            (0.0, -0.005, 0.06),
+            (0.03, -0.005, 0.06),
+            (0.015, -0.005, 0.015),
+            (-0.03, -0.005, 0.03),
+        ],
+        "lfmetacarpal": [(-0.015, 0.0, 0.02)],
+    }
+    return valid_names, offset_map, skip_indices
 
-            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([-1, 0, 0], device=device).repeat(num_envs, 1) * 0.03) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.03) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 1, 0], device=device).repeat(num_envs, 1) * -0.005)
-            hand_body_pos.append(body_pos)
+def get_point_cloud_world(env_index: int | None = 0, prim_suffix: str = "ObjectPC"):
+    """Fetch point cloud overlays in world coordinates.
 
-        elif n == 10:
-            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.02) \
-                + quat_apply(hand_joint_rot[:, n, :], torch.tensor([-1, 0, 0], device=device).repeat(num_envs, 1) * 0.015)
-            hand_body_pos.append(body_pos)
-        else:
-            body_pos = hand_joint_pos[:, n, :] + quat_apply(hand_joint_rot[:, n, :], torch.tensor([0, 0, 1], device=device).repeat(num_envs, 1) * 0.02)
-            hand_body_pos.append(body_pos)
-    
-    hand_body_pos = torch.stack(hand_body_pos, dim=1)
-    hand_body_pos = torch.cat([hand_body_pos, hand_joint_pos], dim=1)
-    return hand_body_pos
+    Args:
+        env_index: Which env to read (int), or None to fetch all envs.
+        prim_suffix: Name of the point cloud prim under the object (default: ``ObjectPC``).
 
+    Returns:
+        - If env_index is an int: (N,3) array for that env (empty if missing).
+        - If env_index is None: list of per-env arrays; if all shapes match, returns stacked (E,N,3).
+    """
+    import omni.usd
+    from pxr import UsdGeom, Usd
 
-def get_point_cloud_world(env_index: int = 0, prim_suffix: str = "ObjectPC") -> np.ndarray:
-    """Fetch the spawned point cloud overlay for an env in world coordinates."""
+    def _read_env(idx: int) -> np.ndarray:
+        prim_path = f"/World/envs/env_{idx}/Object/{prim_suffix}"
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            return np.zeros((0, 3), dtype=np.float32)
+        pc = UsdGeom.Points(prim)
+        pts_local = pc.GetPointsAttr().Get()
+        if not pts_local:
+            return np.zeros((0, 3), dtype=np.float32)
+        xf = pc.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        pts_world = [xf.Transform(p) for p in pts_local]
+        return np.array([[p[0], p[1], p[2]] for p in pts_world], dtype=np.float32)
+
     stage = omni.usd.get_context().get_stage()
-    prim_path = f"/World/envs/env_{env_index}/Object/{prim_suffix}"
-    prim = stage.GetPrimAtPath(prim_path)
-    if not prim.IsValid():
+
+    if env_index is not None:
+        return _read_env(int(env_index))
+
+    envs_root = stage.GetPrimAtPath("/World/envs")
+    env_indices: list[int] = []
+    if envs_root and envs_root.IsValid():
+        for child in envs_root.GetChildren():
+            name = child.GetName()
+            if name.startswith("env_") and name[4:].isdigit():
+                env_indices.append(int(name[4:]))
+    env_indices.sort()
+    pcs = [_read_env(idx) for idx in env_indices]
+    if not pcs:
         return np.zeros((0, 3), dtype=np.float32)
-    pc = UsdGeom.Points(prim)
-    pts_local = pc.GetPointsAttr().Get()
-    if not pts_local:
+    shapes = {pc.shape for pc in pcs}
+    if len(shapes) == 1:
+        return np.stack(pcs, axis=0)
+    return pcs
+
+def get_hand_points_world(env_index: int | None = 0):
+    """Fetch the spawned hand point overlay (all bodies) in world coordinates.
+
+    Args:
+        env_index: Which env to read (int), or None to fetch all envs.
+
+    Returns:
+        - If env_index is an int: (N,3) array for that env (empty if missing).
+        - If env_index is None: list of per-env arrays; if all shapes match, returns stacked (E,N,3).
+    """
+    import omni.usd
+    from pxr import UsdGeom, Usd
+
+    valid_names, _, _ = define_hand_points()
+    stage = omni.usd.get_context().get_stage()
+
+    def _read_env(idx: int) -> np.ndarray:
+        hand_root = f"/World/envs/env_{idx}/Hand"
+        pts_world: list[list[float]] = []
+        for name in valid_names:
+            prim_path = f"{hand_root}/{name}/HandPoints"
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                continue
+            points = UsdGeom.Points(prim).GetPointsAttr().Get()
+            if not points:
+                continue
+            xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            pts_world.extend([[p[0], p[1], p[2]] for p in (xform.Transform(pt) for pt in points)])
+        if not pts_world:
+            return np.zeros((0, 3), dtype=np.float32)
+        return np.array(pts_world, dtype=np.float32)
+
+    if env_index is not None:
+        return _read_env(int(env_index))
+
+    envs_root = stage.GetPrimAtPath("/World/envs")
+    env_indices: list[int] = []
+    if envs_root and envs_root.IsValid():
+        for child in envs_root.GetChildren():
+            name = child.GetName()
+            if name.startswith("env_") and name[4:].isdigit():
+                env_indices.append(int(name[4:]))
+    env_indices.sort()
+    pts = [_read_env(idx) for idx in env_indices]
+    if not pts:
         return np.zeros((0, 3), dtype=np.float32)
-    xf = pc.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-    pts_world = [xf.Transform(p) for p in pts_local]
-    return np.array([[p[0], p[1], p[2]] for p in pts_world], dtype=np.float32)
+    shapes = {p.shape for p in pts}
+    if len(shapes) == 1:
+        return np.stack(pts, axis=0)
+    return pts
 
 def _load_yaml_cfg(filename: str) -> Dict[str, Any]:
     # load hyperparameters from yaml
@@ -392,31 +463,3 @@ def _build_hand_cfg(hand_spawn: Dict[str, Any], hand_cfg: ArticulationCfg) -> Ar
     # print(hand_cfg)
     # input()
     return hand_cfg
-
-def get_point_cloud_world(env_index: int = 0, prim_suffix: str = "ObjectPC") -> np.ndarray:
-    """Fetch the point cloud overlay for an env in world coordinates.
-
-    Args:
-        env_index: Which environment index to read from (default: 0).
-        prim_suffix: Name of the point cloud prim under the object (default: ``ObjectPC``).
-
-    Returns:
-        An (N, 3) numpy array of points in world frame. If the prim is missing, returns an empty array.
-    """
-    import omni.usd
-    from pxr import UsdGeom, Usd
-
-    stage = omni.usd.get_context().get_stage()
-    prim_path = f"/World/envs/env_{env_index}/Object/{prim_suffix}"
-    prim = stage.GetPrimAtPath(prim_path)
-    if not prim.IsValid():
-        return np.zeros((0, 3), dtype=np.float32)
-
-    pc = UsdGeom.Points(prim)
-    pts_local = pc.GetPointsAttr().Get()
-    if not pts_local:
-        return np.zeros((0, 3), dtype=np.float32)
-
-    xf = pc.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-    pts_world = [xf.Transform(p) for p in pts_local]
-    return np.array([[p[0], p[1], p[2]] for p in pts_world], dtype=np.float32)

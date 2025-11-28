@@ -30,8 +30,8 @@ from legged_lab.envs.unigrasptransformer.helpers import (
     compute_time_encoding,
     quat_to_euler_xyz,
     batch_sided_distance,
-    compute_hand_body_pos,
     get_point_cloud_world,
+    get_hand_points_world
 )
 
 SPAWN_CFG = _load_yaml_cfg("spawn_cfg.yaml")
@@ -45,6 +45,7 @@ class UniGraspTransformerEnv(VecEnv):
         cfg: UnigraspTransformerGraspEnv,
         headless,
     ):
+        # unpacking some hyperparameters
         self.cfg: UnigraspTransformerGraspEnv = cfg
         self.headless = headless
         self.device = self.cfg.device
@@ -53,6 +54,7 @@ class UniGraspTransformerEnv(VecEnv):
         self.num_envs = self.cfg.scene.num_envs
         self.seed(cfg.scene.seed)
 
+        # build simulator
         sim_cfg = sim_utils.SimulationCfg(
             device=cfg.device,
             dt=cfg.sim.dt,
@@ -67,6 +69,7 @@ class UniGraspTransformerEnv(VecEnv):
         )
         self.sim = SimulationContext(sim_cfg)
 
+        # call scene builder and create scene
         scene_cfg = UniGraspSceneCfg(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
         self.scene = InteractiveScene(scene_cfg)
         self.sim.reset()
@@ -82,50 +85,52 @@ class UniGraspTransformerEnv(VecEnv):
         )
         self.object = self.scene["object"]
 
+        # initialization of hand points and object pc (need to be updated at each step)
+        pts = get_hand_points_world(env_index=None)  # returns (E,N,3) if shapes match, else list
+        self.hand_points = torch.as_tensor(pts, device=self.device, dtype=torch.float32)
+        print(f"Hand points loaded from stage directly: {self.hand_points.shape}")
+        
+        pc_np = get_point_cloud_world(env_index=None, prim_suffix="ObjectPC")  # (E,P,3) numpy
+        self.object_points = torch.as_tensor(pc_np, device=self.device, dtype=torch.float32)
+        print(f"Point cloud loaded from USD overlay: {self.object_points.shape}")
+
         #TODO: get point cloud local and from real overlay, check if they are the same, if yes, then point cloud data importing is successful
         # option1: get point cloud from pc overlay (per env)
-        pc_world_list = []
-        for env_idx in range(self.num_envs):
-            pc_np = get_point_cloud_world(env_index=env_idx, prim_suffix="ObjectPC")  # from pc overlay data
-            if pc_np.size == 0:
-                raise ValueError(f"Point cloud data loading not successful for env {env_idx}")
-            pc_world_list.append(torch.as_tensor(pc_np, device=self.device, dtype=torch.float32))
-        self.object_points = torch.stack(pc_world_list, dim=0)  # (E,P,3)
-        print(f"Point cloud loaded from USD overlay: {self.object_points.shape}")
+        # pc_np = get_point_cloud_world(env_index=None, prim_suffix="ObjectPC")  # (E,P,3) numpy
+        # self.object_points = torch.as_tensor(pc_np, device=self.device, dtype=torch.float32)
+        # print(f"Point cloud loaded from USD overlay: {self.object_points.shape}")
+
         
         # option2: get point cloud from npy (world frame), convert to object-local for each env
-        self.object_points_local = None
-        pc_path = getattr(getattr(self.cfg.scene, "grasp_object", None), "pc_fps_path", None)
-        if pc_path:
-            try:
-                pts_np = np.load(Path(pc_path).expanduser())
-                if pts_np.shape[1] >= 3:
-                    pc_world = torch.as_tensor(pts_np[:, :3], device=self.device, dtype=torch.float32)  # (P,3)
-                    obj_pos = self.object.data.root_state_w[:, 0:3]          # (E,3)
-                    obj_quat = self.object.data.root_state_w[:, 3:7]         # (E,4)
-                    quat_obj_conj = quat_conjugate(obj_quat)                 # (E,4)
-                    pc_world_exp = pc_world.unsqueeze(0).expand(self.num_envs, -1, -1)  # (E,P,3)
-                    pc_local = quat_apply(quat_obj_conj.unsqueeze(1), pc_world_exp - obj_pos.unsqueeze(1))  # (E,P,3)
-                    self.object_points_local = pc_local
-                    print(f"Loaded npy point cloud from {pc_path}, world->local shape {self.object_points_local.shape}")
-            except Exception as exc:
-                print(f"Failed to load/convert object point cloud from {pc_path}: {exc}")
-        else:
-            print("pc_path not found!")
+        # self.object_points_local = None
+        # pc_path = getattr(getattr(self.cfg.scene, "grasp_object", None), "pc_fps_path", None)
+        # if pc_path:
+        #     try:
+        #         pts_np = np.load(Path(pc_path).expanduser())
+        #         if pts_np.shape[1] >= 3:
+        #             pc_world = torch.as_tensor(pts_np[:, :3], device=self.device, dtype=torch.float32)  # (P,3)
+        #             obj_pos = self.object.data.root_state_w[:, 0:3]          # (E,3)
+        #             obj_quat = self.object.data.root_state_w[:, 3:7]         # (E,4)
+        #             quat_obj_conj = quat_conjugate(obj_quat)                 # (E,4)
+        #             pc_world_exp = pc_world.unsqueeze(0).expand(self.num_envs, -1, -1)  # (E,P,3)
+        #             pc_local = quat_apply(quat_obj_conj.unsqueeze(1), pc_world_exp - obj_pos.unsqueeze(1))  # (E,P,3)
+        #             self.object_points_local = pc_local
+        #             print(f"Loaded npy point cloud from {pc_path}, world->local shape {self.object_points_local.shape}")
+        #     except Exception as exc:
+        #         print(f"Failed to load/convert object point cloud from {pc_path}: {exc}")
+        # else:
+        #     print("pc_path not found!")
 
-        # quick consistency check: overlay vs npy directly (both expected in world frame, per env)
-        if getattr(self, "object_points", None) is not None and self.object_points_local is not None:
-            if self.object_points.shape != self.object_points_local.shape:
-                print(f"Overlay vs npy point cloud shape mismatch: {self.object_points.shape} vs {self.object_points_local.shape}")
-            else:
-                diff = self.object_points - self.object_points_local
-                max_err = diff.abs().max().item()
-                mean_err = diff.abs().mean().item()
-                status = "IDENTICAL" if max_err < 1e-5 else "DIFFERS"
-                print(f"Overlay vs npy point cloud diff -> max {max_err:.6f}, mean {mean_err:.6f} [{status}]")
-        # TODO: the two options give me two different point cloud input, what the fuck???
-        # LOG: Overlay vs npy point cloud diff -> max 0.999264, mean 0.333088 [DIFFERS]
-        # I think option 1 is more reliable.
+        # # quick consistency check: overlay vs npy directly (both expected in world frame, per env)
+        # if getattr(self, "object_points", None) is not None and self.object_points_local is not None:
+        #     if self.object_points.shape != self.object_points_local.shape:
+        #         print(f"Overlay vs npy point cloud shape mismatch: {self.object_points.shape} vs {self.object_points_local.shape}")
+        #     else:
+        #         diff = self.object_points - self.object_points_local
+        #         max_err = diff.abs().max().item()
+        #         mean_err = diff.abs().mean().item()
+        #         status = "IDENTICAL" if max_err < 1e-5 else "DIFFERS"
+        #         print(f"Overlay vs npy point cloud diff -> max {max_err:.6f}, mean {mean_err:.6f} [{status}]")
 
         print("DEBUGGING data extraction")
         ## DEBUGGING robot related data
@@ -140,24 +145,24 @@ class UniGraspTransformerEnv(VecEnv):
         print("Joint order:", self.joint_names)
         self.body_names = list(self.robot.data.body_names)
         print("body order:", [f"{i}:{name}" for i, name in enumerate(self.body_names)])
-        # adopt UniGrasp-style valid body selection by name (order matters)
-        preferred_valid_names = [
-            "palm",
-            "ffproximal", "ffmiddle", "ffdistal",
-            "mfproximal", "mfmiddle", "mfdistal",
-            "rfknuckle", "rfmiddle", "rfdistal",
-            "lfmetacarpal", "lfknuckle", "lfmiddle", "lfdistal",
-            "thbase", "thhub", "thdistal",
-        ]
-        self.valid_body_indices = [i for name in preferred_valid_names for i, n in enumerate(self.body_names) if n == name]
-        self.valid_body_names = [self.body_names[i] for i in self.valid_body_indices]
-        # skip offsets within the valid list (mirror original 2,5,8,12 skips)
-        self.skip_body_offsets = [2, 5, 8, 12]
-        self.left_out_body_indices = [self.valid_body_indices[i] for i in self.skip_body_offsets if i < len(self.valid_body_indices)]
-        print("valid bodies (indices):", self.valid_body_indices)
-        print("left-out bodies (indices):", self.left_out_body_indices) # should be all the finger middle part
+        # # adopt UniGrasp-style valid body selection by name (order matters)
+        # preferred_valid_names = [
+        #     "palm",
+        #     "ffproximal", "ffmiddle", "ffdistal",
+        #     "mfproximal", "mfmiddle", "mfdistal",
+        #     "rfknuckle", "rfmiddle", "rfdistal",
+        #     "lfmetacarpal", "lfknuckle", "lfmiddle", "lfdistal",
+        #     "thbase", "thhub", "thdistal",
+        # ]
+        # self.valid_body_indices = [i for name in preferred_valid_names for i, n in enumerate(self.body_names) if n == name]
+        # self.valid_body_names = [self.body_names[i] for i in self.valid_body_indices]
+        # # skip offsets within the valid list (mirror original 2,5,8,12 skips)
+        # self.skip_body_offsets = [2, 5, 8, 12]
+        # self.left_out_body_indices = [self.valid_body_indices[i] for i in self.skip_body_offsets if i < len(self.valid_body_indices)]
+        # print("valid bodies (indices):", self.valid_body_indices)
+        # print("left-out bodies (indices):", self.left_out_body_indices) # should be all the finger middle part
 
-        # DEBUGGING object related data
+        ## DEBUGGING object related data
         # print(self.object)
         # print(self.pc)
         # input()
@@ -205,6 +210,9 @@ class UniGraspTransformerEnv(VecEnv):
                 device=self.device,
             )
             self.action_buffer.set_time_lag(time_lags, torch.arange(self.num_envs, device=self.device))
+        
+        # Track previous action for observations (wrist force/torque + 18 finger targets).
+        self.prev_action = torch.zeros(self.num_envs, 24, device=self.device)
 
         # Episode length buffer
         # Episode and timeout tracking.
@@ -226,8 +234,14 @@ class UniGraspTransformerEnv(VecEnv):
         self.action = torch.zeros(
             self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False
         )
-        # Track previous action for observations (wrist force/torque + 18 finger targets).
-        self.prev_action = torch.zeros(self.num_envs, 24, device=self.device)
+        
+        # Task outcome placeholders (to be wired in reward/termination logic).
+        self.grasp_success_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.grasp_hold_steps = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+
+        # Optional tactile/contact placeholders (populate once sensors are available).
+        self.fingertip_contact_forces = torch.zeros(self.num_envs, 5, 3, device=self.device)
+        self.fingertip_contact_torques = torch.zeros(self.num_envs, 5, 3, device=self.device)
     
 
     def compute_current_observations(self):
@@ -250,10 +264,7 @@ class UniGraspTransformerEnv(VecEnv):
         robot_data = self.robot.data
         object_data = self.object.data
         prev_action = self.prev_action # extract previous action
-        # TODO: check if the time embedding works
-        sim_time = self.episode_length_buf # we should extract current time from episode_length buffer
-
-
+     
         # unpack observation from real readings
         wrist_pos = robot_data.root_state_w[:, 0:3]
         wrist_rot_quat = robot_data.root_state_w[:, 3:7]
@@ -314,7 +325,7 @@ class UniGraspTransformerEnv(VecEnv):
             dim=-1,
         )
         
-        # TODO: first define the 36 points on the hand, then extract hand_object_dist
+        ## extract hand points and point cloud from the stage, and calculate distance
         # it seems the original unigrasptransformer hardcoded the interesting body indexes
         # from the original mjcf, the body index looks like this:
         """
@@ -327,20 +338,19 @@ class UniGraspTransformerEnv(VecEnv):
         # and they pick: valid_shadow_hand_bodies = [1,3,4,5,7,8,9,10,12,13,14,15,17,18,19,21,23] to add normal offsets
         # and for 2,5,8,12, they apply special offsets
 
-        # define hand pose
-        hand_joint_pos = body_state[:, self.valid_body_indices, 0:3]
-        hand_joint_rot = body_state[:, self.valid_body_indices, 3:7]
-        hand_body_pos = compute_hand_body_pos(hand_joint_pos, hand_joint_rot)
+        # in our usd, the body order is:
+        """
+        body order: ['0:world', '1:palm', '2:ffknuckle', '3:lfmetacarpal', '4:mfknuckle', '5:rfknuckle', '6:thbase', '7:palm_center_marker', '8:ffproximal', '9:lfknuckle', '10:mfproximal', '11:rfproximal', '12:thproximal', '13:palm_dir_marker', '14:ffmiddle', '15:lfproximal', '16:mfmiddle', '17:rfmiddle', '18:thhub', '19:ffdistal', '20:lfmiddle', '21:mfdistal', '22:rfdistal', '23:thmiddle', '24:fftip', '25:lfdistal', '26:mftip', '27:rftip', '28:thdistal', '29:lftip', '30:thtip']
+        valid bodies (indices): [1, 8, 14, 19, 10, 16, 21, 5, 17, 22, 3, 9, 20, 25, 6, 18, 28]
+        left-out bodies (indices): [14, 16, 17, 20]
+        """
 
+        # get hand body points from stage at runtime
+        hand_body_pos = self.hand_points
+        # get object point data from stage at runtime
+        object_pc = self.object_points
         # calculate hand object distance
-        if self.object_points_local is not None:
-            obj_pts_w = quat_apply(obj_quat.unsqueeze(1), self.object_points_local.unsqueeze(0).expand(self.num_envs, -1, -1))
-            object_points = obj_pts_w + obj_center.unsqueeze(1) # TODO: this is wrong
-        elif hasattr(self, "pc") and hasattr(self.pc, "data") and hasattr(self.pc.data, "points_w"):
-            object_points = self.pc.data.points_w
-        else:
-            object_points = obj_center.unsqueeze(1)  # fallback: object center as single point
-        hand_object_dist = batch_sided_distance(hand_body_pos, object_points).view(self.num_envs, -1)
+        hand_object_dist = batch_sided_distance(hand_body_pos, object_pc).view(self.num_envs, -1)
 
         ## time embeddings
         # one thing could happen is that our physics step and control step are not at the same frequency
@@ -522,16 +532,6 @@ class UniGraspTransformerEnv(VecEnv):
             noise_vec[12 + self.num_actions * 2 : 12 + self.num_actions * 3] = 0.0
             noise_vec[12 + self.num_actions * 3 : 18 + self.num_actions * 3] = 0.0
             self.noise_scale_vec = noise_vec
-
-            if self.cfg.scene.height_scanner.enable_height_scan:
-                height_scan = (
-                    self.height_scanner.data.pos_w[:, 2].unsqueeze(1)
-                    - self.height_scanner.data.ray_hits_w[..., 2]
-                    - self.cfg.normalization.height_scan_offset
-                )
-                height_scan_noise_vec = torch.zeros_like(height_scan[0])
-                height_scan_noise_vec[:] = noise_scales.height_scan * self.obs_scales.height_scan
-                self.height_scan_noise_vec = height_scan_noise_vec
 
         self.actor_obs_buffer = CircularBuffer(
             max_len=self.cfg.robot.actor_obs_history_length, batch_size=self.num_envs, device=self.device

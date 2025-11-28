@@ -28,6 +28,7 @@ from isaaclab.utils import configclass
 import numpy as np
 
 from legged_lab.envs.base.my_confg import GraspObjectCfg, TableCfg
+from legged_lab.envs.unigrasptransformer.helpers import define_hand_points
 from legged_lab.assets.shadow_hand_with_fingertip.shadow_hand import SHADOW_HAND_CFG
 from legged_lab.sensors.camera import TiledCameraCfg
 from legged_lab.terrains.ray_caster_cfg import RayCasterCfg
@@ -142,6 +143,50 @@ def _spawn_pca_axes_from_npy(
         a1 = (float(scale * axis[0]), float(scale * axis[1]), float(scale * axis[2]))
         curve.GetPointsAttr().Set([Gf.Vec3f(*a0), Gf.Vec3f(*a1)])
     return root.GetPrim()
+
+@clone
+def _spawn_hand_points_overlay(
+    prim_path: str,
+    cfg: sim_utils.SpawnerCfg,
+    **kwargs,
+):
+    """Spawn per-body hand point overlays (mirrors compute_hand_body_pos offsets)."""
+    import omni.usd
+    import isaacsim.core.utils.prims as prim_utils
+    from pxr import Gf, UsdGeom
+
+    stage = omni.usd.get_context().get_stage()
+    hand_root = prim_path.rsplit("/", 1)[0]  # e.g., /World/envs/env_X/Hand
+
+    # Offsets are defined in the local frame of each body so they follow articulation motion.
+    valid_names, offset_map, skip_indices = define_hand_points()
+    color = getattr(cfg, "color", (0.95, 0.2, 0.6))
+    width = getattr(cfg, "width", 0.01)
+
+    # Group root to keep overlay discoverable in the stage tree.
+    prim_utils.create_prim(prim_path, "Xform")
+
+    for idx, name in enumerate(valid_names):
+        body_path = f"{hand_root}/{name}"
+        body_prim = stage.GetPrimAtPath(body_path)
+        if not body_prim.IsValid():
+            # Body not present; skip instead of creating conflicting prims.
+            continue
+
+        offsets: list[tuple[float, float, float]] = []
+        if idx not in skip_indices:
+            offsets.extend(offset_map.get(name, [(0.0, 0.0, 0.02)]))
+
+        # Always include the body origin (matches final concat in compute_hand_body_pos).
+        offsets.append((0.0, 0.0, 0.0))
+
+        points_prim_path = f"{body_path}/HandPoints"
+        points_prim = UsdGeom.Points.Define(stage, points_prim_path)
+        points_prim.CreateWidthsAttr([width] * len(offsets))
+        points_prim.GetDisplayColorAttr().Set([Gf.Vec3f(*color)])
+        points_prim.GetPointsAttr().Set([Gf.Vec3f(*o) for o in offsets])
+
+    return stage.GetPrimAtPath(prim_path)
 
 
 if TYPE_CHECKING:
@@ -259,6 +304,19 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
         if robot_cfg is not None:
             self.robot: ArticulationCfg = robot_cfg
             print(f"[UniGraspSceneCfg] Robot prim: {self.robot.prim_path}")
+
+            # Spawn debug overlay showing hand point definitions (body origins + offset points).
+            hand_points_cfg = sim_utils.SpawnerCfg(
+                func=_spawn_hand_points_overlay,
+                copy_from_source=False,
+            )
+            hand_points_cfg.width = 0.01
+            hand_points_cfg.color = (0.95, 0.2, 0.6)
+            # the hand points are spawned under each link of the hand so it follows each link movement in runtime
+            self.hand_points_overlay = AssetBaseCfg(
+                prim_path="{ENV_REGEX_NS}/Hand/HandPointsOverlay",
+                spawn=hand_points_cfg,
+            )
 
 
 
