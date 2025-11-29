@@ -39,6 +39,7 @@ object:
 hand:
     asset_type: shadowhand
     asset_path: /home/chizhang/projects/Tiangong_isaac_rl/legged_lab/assets/shadow_hand_with_fingertip/shadow_hand_right_for_conversion/shadow_hand_right_for_conversion.usd
+    enable_joint_force_sensors: true
     pos:
     - 0.5
     - 0.2

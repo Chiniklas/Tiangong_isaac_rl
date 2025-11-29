@@ -1,8 +1,20 @@
-# UniGraspTransformer hand environment (simplified from TienKungEnv):
-# - Shadow Hand as the default robot, no AMP pipeline, no terrain curriculum.
-# - Hand-only body IDs (fingertips); limb IDs left empty as placeholders.
-# - Observation pipeline currently stubbed; fill task-specific obs as needed.
-# - Retains base sim/scene/buffer/step structure for compatibility with RL runners.
+"""
+Observation flow from init
+- __init__: builds sim/scene, grabs handles (robot, object, goal if present), sets buffers, event/reward managers, then reset.
+- reset: clears buffers, applies reset events if configured, writes scene to sim, steps once.
+- step: after physics, it refreshes stage-derived points and calls compute_observations.
+- compute_observations: calls compute_current_observations (read sim tensors, build blocks: proprio, prev action, object state + goal delta, optional PCA, visual placeholder, optional time and hand–object dist), adds actor-only noise if enabled, pushes into history buffers, flattens history, clips if you enable it, returns actor/criti
+
+Action flow from init
+- __init__: sets action buffer/delay, scales/clips from cfg.
+- reset: clears action buffer and prev_action.
+- step:
+    - Validate 24-D action; optional delay via DelayBuffer.
+    - Clip to clip_actions, scale by action_scale, add defaults to build finger joint targets; wrist wrench stays as raw 6D.
+    - Cache prev_action (wrench + processed finger targets).
+    - For each substep (sim.decimation): apply wrist force/torque to palm body 0, set joint position targets, write to sim, step physics/render, update scene.
+    - Post-step: increment episode length, compute rewards/termination, reset flagged envs, refresh points, compute/return obs, reward, reset flags, extras.
+"""
 
 import isaaclab.sim as sim_utils
 import isaacsim.core.utils.torch as torch_utils  # type: ignore
@@ -54,6 +66,11 @@ class UniGraspTransformerEnv(VecEnv):
         self.num_envs = self.cfg.scene.num_envs
         self.seed(cfg.scene.seed)
 
+        # set obs gating parameters
+        self.encode_object_pca_obs = False
+        self.encode_time_embed = True
+        self.encode_hand_object_dist = True
+
         # build simulator
         sim_cfg = sim_utils.SimulationCfg(
             device=cfg.device,
@@ -78,7 +95,7 @@ class UniGraspTransformerEnv(VecEnv):
         # - self.robot: articulation API for issuing controls and reading state.
         # - self.fingertip_ids: indices of fingertip bodies for convenience in rewards/obs.
         # - self.object: the grasp target rigid object.
-        # - self.pc: point cloud sensor attached to the object.
+        # - self.goal_object: the independently spawned goal point
         
         ### GET RELATED DATA!
         ## robot related initialization
@@ -86,7 +103,7 @@ class UniGraspTransformerEnv(VecEnv):
         self.fingertip_ids, _ = self.robot.find_bodies(
             name_keys=["fftip", "mftip", "rftip", "lftip", "thtip"], preserve_order=True
         )
-        
+
         ## object related initialization
         self.object = self.scene["object"]
         # Goal pose
@@ -104,7 +121,7 @@ class UniGraspTransformerEnv(VecEnv):
         # print(self.robot.__dict__)  # internal refs
         # print(dir(self.robot))      # method/attr names
         # robot data debugs
-        # print(self.robot.data.__dict__.keys())
+        print(self.robot.data.__dict__.keys())
         # print(self.robot.data.root_state_w)
         self.joint_names = self.robot.data.joint_names
         print("Joint order:", self.joint_names)
@@ -136,10 +153,10 @@ class UniGraspTransformerEnv(VecEnv):
         self.reward_manager = RewardManager(self.cfg.reward, self)
         self.init_buffers()
         env_ids = torch.arange(self.num_envs, device=self.device)
-        # self.event_manager = EventManager(self.cfg.domain_rand.events, self)
-        # if "startup" in self.event_manager.available_modes:
-        #     self.event_manager.apply(mode="startup")
-        # self.reset(env_ids)
+        self.event_manager = EventManager(self.cfg.domain_rand.events, self)
+        if "startup" in self.event_manager.available_modes:
+            self.event_manager.apply(mode="startup")
+        self.reset(env_ids)
 
         print("INITIALIZATION SUCCESSFUL!")
 
@@ -176,6 +193,7 @@ class UniGraspTransformerEnv(VecEnv):
 
         ## Action buffer initialization
         # Action delay buffer to optionally inject latency between issued and applied actions.
+        # NOTE: Currently the action delay is disabled
         self.action_buffer = DelayBuffer(
             self.cfg.domain_rand.action_delay.params["max_delay"], self.num_envs, device=self.device
         )
@@ -206,8 +224,7 @@ class UniGraspTransformerEnv(VecEnv):
         ## Observation buffer
         # Observation noise/scales.
         self.obs_scales = self.cfg.normalization.obs_scales
-        # self.add_noise = self.cfg.noise.add_noise
-        self.add_noise = False
+        self.add_noise = self.cfg.noise.add_noise
         self.init_obs_buffer()
 
         # Resolved scene entity descriptor for the robot (ids for managers/reward terms).
@@ -223,6 +240,7 @@ class UniGraspTransformerEnv(VecEnv):
         self.grasp_hold_steps = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
 
         # Optional tactile/contact placeholders (populate once sensors are available).
+        # NOTE: currently the fingertip sensors are not yet implemented
         self.fingertip_contact_forces = torch.zeros(self.num_envs, 5, 3, device=self.device)
         self.fingertip_contact_torques = torch.zeros(self.num_envs, 5, 3, device=self.device)
     
@@ -261,7 +279,9 @@ class UniGraspTransformerEnv(VecEnv):
 
         joint_angle = robot_data.joint_pos[:, :22]
         joint_vel = robot_data.joint_vel[:, :22]
-        joint_force = robot_data.joint_measured_force[:, :22]
+        # TODO:joint force sensors need to be added
+        joint_force = torch.zeros_like(joint_vel)
+        # joint_force = self.robot.data.measured_joint_force()
         
         body_state = self.robot.data.body_state_w  # (E, B, 13)
         fingertip_pos = body_state[:, self.fingertip_ids, 0:3].reshape(self.num_envs, -1)  # (E, 5*3)
@@ -379,13 +399,13 @@ class UniGraspTransformerEnv(VecEnv):
             object_state,
         ]
         # gate PCA block like upstream encode_obj_pca
-        if getattr(self.cfg.scene, "encode_obj_pca", False):
+        if self.encode_object_pca_obs:
             obs_parts.append(object_pca)
-        obs_parts += [
-            object_visual,  # always allocated; zero until visual features are wired
-            time_embed,
-            hand_object_dist,
-        ]
+        obs_parts.append(object_visual)  # always allocated; zero until visual features are wired
+        if self.encode_time_embed:
+            obs_parts.append(time_embed)
+        if self.encode_hand_object_dist:
+            obs_parts.append(hand_object_dist)
         # ==========================================================================
         # NOTE:it is possible for the critic observation to be larger than actor observation because you add privileged information to that 
         current_actor_obs = torch.cat(obs_parts, dim=-1)
@@ -397,9 +417,6 @@ class UniGraspTransformerEnv(VecEnv):
 
     def compute_observations(self):
         # a higher level observation wrapper which takes per timestep observation and add noise and sensor data
-        # in our dex grasp case, there are two modes
-        # one is purely state based policy training, you should only use the perstep observation
-        # second is vision based policy training, you should extend the perstep observation
         current_actor_obs, current_critic_obs = self.compute_current_observations()
         if self.add_noise:
             current_actor_obs += (2 * torch.rand_like(current_actor_obs) - 1) * self.noise_scale_vec
@@ -452,50 +469,41 @@ class UniGraspTransformerEnv(VecEnv):
         self.sim.forward()
 
     def step(self, actions: torch.Tensor):
+        # the input actions are ppo outputs cliped within [-1,1]
+        # you need to unclip it and apply to simulation
         # TODO: the control strategy is a bit off from the original unigrasptransformer
         # Expect 24D actions: 6 (wrist force/torque placeholders) + 18 finger joints.
         num_act = 24
         if actions.shape[1] != num_act:
             raise ValueError(f"action dimension mismatch: expected {num_act}, got {actions.shape[1]}")
-        
-        # the inputed action is normalized, without domian randomization
-        # action process
-        if self.cfg.domain_rand.action_delay.enable:
-            delayed_actions = self.action_buffer.compute(actions)
         else:
-            delayed_actions = actions
-        self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
+            print("action dim matches for step")
 
-        processed_actions = self.action * self.action_scale + self.robot.data.default_joint_pos
-
-        # clip/scale 
-        # TODO: clip and scaling still not clear
-        clip_actions = getattr(self, "clip_actions", self.cfg.normalization.clip_actions)
-        action_scale = getattr(self, "action_scale", self.cfg.robot.action_scale)
-        actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
-
-        # split
-        wrist_wrench = actions[:, :6]  # fx, fy, fz, tx, ty, tz
-        finger_actions = actions[:, 6:]  # 18 finger joints
-
-        # map finger actions to joint targets; assume last 18 joints correspond to fingers
-        # TODO: figure out the unigrasptransformer action type, do they use delta action?
-        default_finger_pos = self.robot.data.default_joint_pos[:, -18:]
-        processed_finger_actions = finger_actions * action_scale + default_finger_pos
-
-        # build full joint target: keep non-finger joints at default
-        processed_actions = self.robot.data.default_joint_pos.clone()
-        processed_actions[:, -18:] = processed_finger_actions
+        # actions should already be normalized to [-1, 1]
+        if torch.any(actions > 1.0) or torch.any(actions < -1.0):
+            raise ValueError("received unnormalized actions; expected values within [-1, 1]")
+        else:
+            print("input action normalization ok")
+        
+        # splitting into wrist action and joint action
+        wrist_wrench, finger_targets = self.calculate_real_action(actions) # action modes(direct or relative) is already considered about in the calculate_real_action()
 
         # cache applied action for observations
-        self.prev_action = torch.cat([wrist_wrench, processed_finger_actions], dim=-1)
+        self.prev_action = torch.cat([wrist_wrench, finger_targets], dim=-1)
+
+        # 18 actuated joints (masters); mimic joints follow via USD coupling
+        finger_joint_ids = torch.tensor(
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 19, 21],
+            device=self.device,
+            dtype=torch.long,
+        )
 
         # apply wrist wrench on the root link (body id 0) in the global frame
         forces = torch.zeros((self.num_envs, 1, 3), device=self.device)
         torques = torch.zeros((self.num_envs, 1, 3), device=self.device)
         forces[:, 0, :] = wrist_wrench[:, :3]
         torques[:, 0, :] = wrist_wrench[:, 3:]
-        
+
         # Apply one action over multiple physics substeps (higher-rate physics than control)
         # and accumulate fingertip contact forces/speeds for averaging.
         for _ in range(self.cfg.sim.decimation):
@@ -503,7 +511,7 @@ class UniGraspTransformerEnv(VecEnv):
             # apply force and torque control on the palm
             self.robot.set_external_force_and_torque(forces=forces, torques=torques, body_ids=[0], is_global=True)
             # apply position control on the joints
-            self.robot.set_joint_position_target(processed_actions) # 18 dim joint positions
+            self.robot.set_joint_position_target(finger_targets, joint_ids=finger_joint_ids)
             self.scene.write_data_to_sim()
             self.sim.step(render=False)
             self.scene.update(dt=self.physics_dt)
@@ -518,10 +526,13 @@ class UniGraspTransformerEnv(VecEnv):
 
         # data buffer processing
         self.episode_length_buf += 1
-        self.reset_buf, self.time_out_buf = self.check_reset()
         reward_buf = self.reward_manager.compute(self.step_dt)
-        self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-        self.reset(self.reset_env_ids)
+
+        self.reset_buf = None
+        self.time_out_buf = None
+        # self.reset_buf, self.time_out_buf = self.check_reset()
+        # self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        # self.reset(self.reset_env_ids)
 
         # refresh stage-derived object point cloud and hand points each control step
         self.refresh_stage_points()

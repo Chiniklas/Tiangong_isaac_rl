@@ -1,7 +1,9 @@
 import math
 from dataclasses import MISSING
 from isaaclab.utils import configclass
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.assets.articulation import ArticulationCfg
+from legged_lab.envs.base.base_config import ActionDelayCfg
 
 # @configclass
 # class RobotCfg:
@@ -86,10 +88,42 @@ class GraspObsScaleCfg:
     fingertip_torque: float = 10.0
 
 @configclass
-@configclass
 class UnigrasptransformerNormalizationCfg:
     obs_scales: GraspObsScaleCfg = GraspObsScaleCfg()
     clip_observations: float | None = None
     clip_actions: float | None = None
 
-    
+@configclass
+class myEventCfg:
+    # Placeholder event terms; override with real funcs/modes/params when enabling DR.
+    physics_material = EventTerm(
+        func=None,
+        mode=None,
+        params={},
+    )
+    add_base_mass = EventTerm(
+        func=None,
+        mode=None,
+        params={},
+    )
+    reset_base = EventTerm(
+        func=None,
+        mode=None,
+        params={},
+    )
+    reset_robot_joints = EventTerm(
+        func=None,
+        mode=None,
+        params={},
+    )
+    push_robot = EventTerm(
+        func=None,
+        mode=None,
+        params={},
+    )
+
+@configclass
+class myDomainRandCfg:
+    # this is a place holder for my custom domain randomization cfg
+    events: myEventCfg | None = None
+    action_delay: ActionDelayCfg = ActionDelayCfg(enable=False)

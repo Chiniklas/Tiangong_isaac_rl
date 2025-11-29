@@ -255,6 +255,7 @@ def _build_hand_spawn(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "asset_path",
         "pos",
         "rot_xyzw",
+        "enable_joint_force_sensors"
         # "show_palm_dir",
         # "palm_dir_local",
         # "palm_dir_offset_local",
@@ -459,6 +460,7 @@ def _build_hand_cfg(hand_spawn: Dict[str, Any], hand_cfg: ArticulationCfg) -> Ar
     hand_rot = tuple(hand_spawn.get("rot_xyzw"))
     hand_cfg.init_state.pos = hand_pos
     hand_cfg.init_state.rot = hand_rot
+    hand_cfg.enable_joint_force_sensors = hand_spawn.get("enable_joint_force_sensors")
     # print("override default hand spawning cfg")
     # print(hand_cfg)
     # input()

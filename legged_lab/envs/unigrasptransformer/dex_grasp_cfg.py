@@ -62,7 +62,9 @@ from legged_lab.envs.base.my_confg import(
     GraspObjectCfg,
     GraspObjectGoalCfg,
     GraspObsScaleCfg,
-    UnigrasptransformerNormalizationCfg
+    UnigrasptransformerNormalizationCfg,
+    myDomainRandCfg,
+    myEventCfg
 )
 
 from legged_lab.envs.unigrasptransformer.helpers import(
@@ -193,13 +195,15 @@ class UnigraspTransformerGraspEnv:
 
     reward = GraspRewardCfg()
     
-    # TODO: to be finetuned, there are richer options in the original unigrasptransformer
     # domain randomization adds noise and delay to action 
-    domain_rand: DomainRandCfg = DomainRandCfg(action_delay=ActionDelayCfg(enable=False))
+    # domain randomization currently only a place holder and not implemented yet
+    domain_rand: myDomainRandCfg = myDomainRandCfg()
     noise: NoiseCfg = NoiseCfg(add_noise=False)
+    
     # normalization clips observation and add noise to obs if enabled
     normalization: UnigrasptransformerNormalizationCfg = UnigrasptransformerNormalizationCfg(
         obs_scales=GraspObsScaleCfg(),
+        #TODO: Obs scaling not ready yet
     )
     # ============================
     sim: SimCfg = SimCfg()

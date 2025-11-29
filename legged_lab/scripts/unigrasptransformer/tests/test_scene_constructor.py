@@ -83,19 +83,10 @@ def main():
     # instantiate unigrasptransformer env
     env = UniGraspTransformerEnv(cfg=grasp_cfg, 
                                  headless=args.headless)
-    env.scene.reset(torch.arange(env.num_envs, device=env.device))
-
-    init_dict = env.robot.cfg.init_state.joint_pos
-    joint_names = env.robot.data.joint_names
-    pos = torch.zeros(env.num_envs, len(joint_names), device=env.device)
-    for i, name in enumerate(joint_names):
-        if name in init_dict:
-            pos[:, i] = float(init_dict[name])
-    vel = torch.zeros_like(pos)
-    env.robot.write_joint_state_to_sim(position=pos, velocity=vel)
     
-    scene_cfg = env.scene.cfg
+    # setup scene
     scene = env.scene
+    scene.reset(torch.arange(env.num_envs, device=env.device))
 
     # Visualize the freshly built scene (render only when not headless).
     if not args.headless:
@@ -117,18 +108,23 @@ def main():
 
 
     # implement controllers
-    try:
-        step_i = 0
-        run_forever = args.steps < 0
-        while run_forever or step_i < args.steps:
-            env.sim.step(render=not args.headless)
-            step_i += 1
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if hasattr(env, "close"):
-            env.close()
-        simulation_app.close()
+    # simple zero-action controller
+    zero_action = torch.zeros(env.num_envs, 24, device=env.device)
+
+    step_i = 0
+    print("current action:", zero_action)
+    print("current step", step_i)
+    run_forever = args.steps < 0
+    while run_forever or step_i < args.steps:
+        # advance through the env API to exercise action/obs/reward paths
+        actor_obs, reward, reset, extras = env.step(zero_action)
+        if step_i % 10 == 0:
+            print(f"[step {step_i}] reward={reward[:1].cpu().numpy()}")
+        step_i += 1
+        input()
+
+    env.close()
+    simulation_app.close()
 
 
 if __name__ == "__main__":
