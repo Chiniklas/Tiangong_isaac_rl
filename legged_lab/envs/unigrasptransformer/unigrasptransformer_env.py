@@ -79,52 +79,23 @@ class UniGraspTransformerEnv(VecEnv):
         # - self.fingertip_ids: indices of fingertip bodies for convenience in rewards/obs.
         # - self.object: the grasp target rigid object.
         # - self.pc: point cloud sensor attached to the object.
+        
+        ### GET RELATED DATA!
+        ## robot related initialization
         self.robot: Articulation = self.scene["robot"]
         self.fingertip_ids, _ = self.robot.find_bodies(
             name_keys=["fftip", "mftip", "rftip", "lftip", "thtip"], preserve_order=True
         )
+        
+        ## object related initialization
         self.object = self.scene["object"]
-
+        # Goal pose
+        self.goal_object = self.scene["object_goal"]
+        self.goal_states = self.goal_object.data.root_state_w  # (E, 13)
+        self.goal_pos = self.goal_states[:, 0:3]
+        self.goal_rot = self.goal_states[:, 3:7]
         # initialization of hand points and object pc; refreshed each step from stage
         self.refresh_stage_points()
-
-        #TODO: get point cloud local and from real overlay, check if they are the same, if yes, then point cloud data importing is successful
-        # option1: get point cloud from pc overlay (per env)
-        # pc_np = get_point_cloud_world(env_index=None, prim_suffix="ObjectPC")  # (E,P,3) numpy
-        # self.object_points = torch.as_tensor(pc_np, device=self.device, dtype=torch.float32)
-        # print(f"Point cloud loaded from USD overlay: {self.object_points.shape}")
-
-        
-        # option2: get point cloud from npy (world frame), convert to object-local for each env
-        # self.object_points_local = None
-        # pc_path = getattr(getattr(self.cfg.scene, "grasp_object", None), "pc_fps_path", None)
-        # if pc_path:
-        #     try:
-        #         pts_np = np.load(Path(pc_path).expanduser())
-        #         if pts_np.shape[1] >= 3:
-        #             pc_world = torch.as_tensor(pts_np[:, :3], device=self.device, dtype=torch.float32)  # (P,3)
-        #             obj_pos = self.object.data.root_state_w[:, 0:3]          # (E,3)
-        #             obj_quat = self.object.data.root_state_w[:, 3:7]         # (E,4)
-        #             quat_obj_conj = quat_conjugate(obj_quat)                 # (E,4)
-        #             pc_world_exp = pc_world.unsqueeze(0).expand(self.num_envs, -1, -1)  # (E,P,3)
-        #             pc_local = quat_apply(quat_obj_conj.unsqueeze(1), pc_world_exp - obj_pos.unsqueeze(1))  # (E,P,3)
-        #             self.object_points_local = pc_local
-        #             print(f"Loaded npy point cloud from {pc_path}, world->local shape {self.object_points_local.shape}")
-        #     except Exception as exc:
-        #         print(f"Failed to load/convert object point cloud from {pc_path}: {exc}")
-        # else:
-        #     print("pc_path not found!")
-
-        # # quick consistency check: overlay vs npy directly (both expected in world frame, per env)
-        # if getattr(self, "object_points", None) is not None and self.object_points_local is not None:
-        #     if self.object_points.shape != self.object_points_local.shape:
-        #         print(f"Overlay vs npy point cloud shape mismatch: {self.object_points.shape} vs {self.object_points_local.shape}")
-        #     else:
-        #         diff = self.object_points - self.object_points_local
-        #         max_err = diff.abs().max().item()
-        #         mean_err = diff.abs().mean().item()
-        #         status = "IDENTICAL" if max_err < 1e-5 else "DIFFERS"
-        #         print(f"Overlay vs npy point cloud diff -> max {max_err:.6f}, mean {mean_err:.6f} [{status}]")
 
         print("DEBUGGING data extraction")
         ## DEBUGGING robot related data
@@ -165,10 +136,10 @@ class UniGraspTransformerEnv(VecEnv):
         self.reward_manager = RewardManager(self.cfg.reward, self)
         self.init_buffers()
         env_ids = torch.arange(self.num_envs, device=self.device)
-        self.event_manager = EventManager(self.cfg.domain_rand.events, self)
-        if "startup" in self.event_manager.available_modes:
-            self.event_manager.apply(mode="startup")
-        self.reset(env_ids)
+        # self.event_manager = EventManager(self.cfg.domain_rand.events, self)
+        # if "startup" in self.event_manager.available_modes:
+        #     self.event_manager.apply(mode="startup")
+        # self.reset(env_ids)
 
         print("INITIALIZATION SUCCESSFUL!")
 
@@ -235,7 +206,8 @@ class UniGraspTransformerEnv(VecEnv):
         ## Observation buffer
         # Observation noise/scales.
         self.obs_scales = self.cfg.normalization.obs_scales
-        self.add_noise = self.cfg.noise.add_noise
+        # self.add_noise = self.cfg.noise.add_noise
+        self.add_noise = False
         self.init_obs_buffer()
 
         # Resolved scene entity descriptor for the robot (ids for managers/reward terms).
@@ -257,26 +229,32 @@ class UniGraspTransformerEnv(VecEnv):
 
     def compute_current_observations(self):
         # TODO: check each observation domain to make sure they have the right reading
-        # dim = 167 + 24 + 16 + 36 + 29
-        #       proprioception(167)
-        #           wrist position(3) and rotation(3)
-        #           Finger-joint angle(22), angular velocity(22) and force(22)
-        #           Fingertip position(5*3), quaternion rotation(5*4), linear velocity(5*3), angular velocity(5*3), force(5*3) and torque(5*3)
-        #       Previous action(24)
-        #           wrist force(3) and torque(3); finger-joint angles(18)
-        #       Object state(16)
-        #           Object center(3), quaternion rotation(4), linear velocity(3), angular velocity(3), object-goal distance(3)
-        #       Hand-Object Distance(36)
-        #           hand body points to object point cloud distances (36)
-        #       Time(29)
-        #           current time(1), sine-cosine time embedding(28)
+        # Observation terms breakdown (all currently included; some are placeholders until wired):
+        #  1- proprioception (167)
+        #     wrist position(3) and rotation Euler(3)
+        #     Finger-joint angle(22), angular velocity(22) and force(22)
+        #     Fingertip position(5*3), quaternion rotation(5*4), linear velocity(5*3), angular velocity(5*3), force(5*3) and torque(5*3)
+        #  2-Previous action (24)
+        #     wrist force(3) and torque(3); finger-joint angles(18)
+        #  3-Object state (16)
+        #     Object center(3), quaternion rotation(4), linear velocity(3), angular velocity(3), object-goal distance(3)
+        #  4-(Optional)Object PCA (9)
+        #     3x3 PCA axes flattened
+        #  5-(Optional)Object visual (128)
+        #     point-cloud feature vector (zero until wired)
+        #  6-Hand-Object Distance (36)
+        #     hand body points to object point cloud distances
+        #  7-Time (29)
+        #     current time(1), sine-cosine time embedding(28)
 
-        # get raw data
+        # TODO: Object scalings not clear
+        ## get raw data
         robot_data = self.robot.data
         object_data = self.object.data
         prev_action = self.prev_action # extract previous action
-     
-        # unpack observation from real readings
+
+        #==================================================================================================
+        # 1- building propriosection obs
         wrist_pos = robot_data.root_state_w[:, 0:3]
         wrist_rot_quat = robot_data.root_state_w[:, 3:7]
         wrist_rot_euler_xyz = quat_to_euler_xyz(wrist_rot_quat)  # convert quat (xyzw) to Euler xyz
@@ -311,6 +289,8 @@ class UniGraspTransformerEnv(VecEnv):
             dim=-1,
         )
 
+        #==================================================================================================
+        # 2- building previous action observations
         # previous action: 6 wrist wrench + 18 finger targets
         prev_wrist_force = prev_action[:,:3]
         prev_wrist_torque = prev_action[:,3:6]
@@ -320,13 +300,21 @@ class UniGraspTransformerEnv(VecEnv):
                                  prev_finger_angles], 
                                  dim=-1)
 
+        #==================================================================================================
+        # 3- building object state obs
         # object pose/velocity in world frame
         obj_center = object_data.root_state_w[:, 0:3]
         obj_quat = object_data.root_state_w[:, 3:7]
         obj_lin_vel = object_data.root_state_w[:, 7:10]
         obj_ang_vel = object_data.root_state_w[:, 10:13]
-        # TODO: wire in goal position to compute goal distance; placeholder zero for now.
-        obj_goal_dist = torch.zeros((self.num_envs, 3), device=self.device)
+        # Goal pose and distance to object center (if goal actor exists).
+        if self.goal_object is not None:
+            self.goal_states = self.goal_object.data.root_state_w  # (E, 13)
+            self.goal_pos = self.goal_states[:, 0:3]
+            self.goal_rot = self.goal_states[:, 3:7]
+            obj_goal_dist = self.goal_pos - obj_center
+        else:
+            obj_goal_dist = torch.zeros((self.num_envs, 3), device=self.device)
         object_state = torch.cat(
             [obj_center,
              obj_quat, 
@@ -335,7 +323,17 @@ class UniGraspTransformerEnv(VecEnv):
              obj_goal_dist],
             dim=-1,
         )
-        
+        #==================================================================================================
+        # 4-(Optional)building propriosection obs
+        # Optional observation domains (placeholders to match upstream structure).
+        object_pca = torch.zeros((self.num_envs, 9), device=self.device)          # 3x3 PCA axes
+
+        #==================================================================================================
+        # 5-(Optional)Object visual (128)
+        object_visual = torch.zeros((self.num_envs, 128), device=self.device)     # visual features placeholder
+
+        #==================================================================================================
+        # 6- building hand object distance obs
         ## extract hand points and point cloud from the stage, and calculate distance
         # it seems the original unigrasptransformer hardcoded the interesting body indexes
         # from the original mjcf, the body index looks like this:
@@ -363,17 +361,38 @@ class UniGraspTransformerEnv(VecEnv):
         # calculate hand object distance
         hand_object_dist = batch_sided_distance(hand_body_pos, object_pc).view(self.num_envs, -1)
 
-        ## time embeddings
+        #==================================================================================================
+        # 7- building time embedding obs
         # one thing could happen is that our physics step and control step are not at the same frequency
+        # we now set the decimation to 1, so no downsampling
         current_time = self.episode_length_buf.unsqueeze(-1).float()
         time_sin_cos = compute_time_encoding(self.episode_length_buf.float(), 28)
         time_embed = torch.cat([current_time, 
                                 time_sin_cos], 
                                 dim=-1)
 
-        current_actor_obs = torch.cat([proprio, prev_action_state, object_state, hand_object_dist, time_embed], dim=-1)
-        current_critic_obs = current_actor_obs
-        # TODO: is it necessary to seperate actor critic observations?
+        # ==========================================================================
+        # form final observation tensor (mirror upstream ordering: hand, action, object(+pca), visual, time, hand-object)
+        obs_parts = [
+            proprio,
+            prev_action_state,
+            object_state,
+        ]
+        # gate PCA block like upstream encode_obj_pca
+        if getattr(self.cfg.scene, "encode_obj_pca", False):
+            obs_parts.append(object_pca)
+        obs_parts += [
+            object_visual,  # always allocated; zero until visual features are wired
+            time_embed,
+            hand_object_dist,
+        ]
+        # ==========================================================================
+        # NOTE:it is possible for the critic observation to be larger than actor observation because you add privileged information to that 
+        current_actor_obs = torch.cat(obs_parts, dim=-1)
+        if not self.cfg.robot.asymmetric_obs:
+            current_critic_obs = current_actor_obs
+        else:
+            raise ValueError("you should patch critic observation with extra information than actor obs")
         return current_actor_obs, current_critic_obs
 
     def compute_observations(self):
@@ -391,9 +410,8 @@ class UniGraspTransformerEnv(VecEnv):
         actor_obs = self.actor_obs_buffer.buffer.reshape(self.num_envs, -1)
         critic_obs = self.critic_obs_buffer.buffer.reshape(self.num_envs, -1)
         
-
-        actor_obs = torch.clip(actor_obs, -self.clip_obs, self.clip_obs)
-        critic_obs = torch.clip(critic_obs, -self.clip_obs, self.clip_obs)
+        # actor_obs = torch.clip(actor_obs, -self.clip_obs, self.clip_obs)
+        # critic_obs = torch.clip(critic_obs, -self.clip_obs, self.clip_obs)
 
         return actor_obs, critic_obs
 
@@ -440,6 +458,7 @@ class UniGraspTransformerEnv(VecEnv):
         if actions.shape[1] != num_act:
             raise ValueError(f"action dimension mismatch: expected {num_act}, got {actions.shape[1]}")
         
+        # the inputed action is normalized, without domian randomization
         # action process
         if self.cfg.domain_rand.action_delay.enable:
             delayed_actions = self.action_buffer.compute(actions)
@@ -448,12 +467,6 @@ class UniGraspTransformerEnv(VecEnv):
         self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
 
         processed_actions = self.action * self.action_scale + self.robot.data.default_joint_pos
-
-        # our action process
-        # Expect 24D actions: 6 (wrist force/torque placeholders) + 18 finger joints.
-        num_act = 24
-        if actions.shape[1] != num_act:
-            raise ValueError(f"action dimension mismatch: expected {num_act}, got {actions.shape[1]}")
 
         # clip/scale 
         # TODO: clip and scaling still not clear

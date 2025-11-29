@@ -27,7 +27,10 @@ from isaaclab.sensors import ContactSensorCfg, patterns
 from isaaclab.utils import configclass
 import numpy as np
 
-from legged_lab.envs.base.my_confg import GraspObjectCfg, TableCfg
+from legged_lab.envs.base.my_confg import (
+    GraspObjectCfg, 
+    GraspObjectGoalCfg, 
+    TableCfg)
 from legged_lab.envs.unigrasptransformer.helpers import define_hand_points
 from legged_lab.assets.shadow_hand_with_fingertip.shadow_hand import SHADOW_HAND_CFG
 from legged_lab.sensors.camera import TiledCameraCfg
@@ -296,6 +299,29 @@ class UniGraspSceneCfg(InteractiveSceneCfg):
                     init_state=AssetBaseCfg.InitialStateCfg(pos=(0,0,0), rot=(1,0,0,0)),
                 )
                 print(f"[UniGraspSceneCfg] PCA axes prim: {self.object_pca_axes.prim_path}")
+
+        # spawn goal marker relative to object start pose
+        goal_cfg = getattr(config, "object_goal", None)
+        if isinstance(goal_cfg, GraspObjectGoalCfg) and getattr(goal_cfg, "enable", False):
+            displacement = getattr(goal_cfg, "displacement", (0.0, 0.0, 0.0)) or (0.0, 0.0, 0.0)
+            base_pos = getattr(object_cfg, "pos", (0.0, 0.0, 0.0))
+            goal_pos = tuple(base_pos[i] + displacement[i] for i in range(3))
+            goal_spawn_cfg = sim_utils.SphereCfg(
+                radius=goal_cfg.radius,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=goal_cfg.color),
+                physics_material=sim_utils.RigidBodyMaterialCfg(
+                    friction_combine_mode="multiply",
+                    restitution_combine_mode="multiply",
+                ),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
+            )
+            self.object_goal = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Goal",
+                spawn=goal_spawn_cfg,
+                init_state=RigidObjectCfg.InitialStateCfg(pos=goal_pos, rot=goal_cfg.rot_xyzw),
+            )
+            print(f"[UniGraspSceneCfg] Goal prim: {self.object_goal.prim_path} (pos {goal_pos}, disp {displacement})")
         else:
             pass
 

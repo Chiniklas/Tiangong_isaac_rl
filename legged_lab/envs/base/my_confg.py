@@ -18,6 +18,7 @@ class DexHandCfg:
     critic_obs_history_length: int = 10
     action_scale: float = 0.25
     terminate_contacts_body_names: list = []
+    asymmetric_obs: bool = False
 
 
 @configclass
@@ -61,6 +62,34 @@ class GraspObjectCfg:
     pca_axes_path: str | None = None
 
 @configclass
+class GraspObjectGoalCfg:
+    # Placeholder config for a goal marker actor (e.g., small sphere above the object).
+    enable: bool = True  # upstream always spawns the goal marker
+    radius: float = 0.01
+    # Upstream only uses a relative offset from the object start pose.
+    displacement: tuple = (0.0, 0.0, 0.2)
+    rot_xyzw: tuple = (0.0, 0.0, 0.0, 1.0)
+    # Visual hints if/when a goal actor is spawned.
+    color: tuple = (173 / 255, 90 / 255, 90 / 255)  # upstream reddish goal marker
+
+    
+@configclass
 class GraspObsScaleCfg:
-    pass
+    # Per-field scales (mirror upstream placeholders).
+    lin_vel: float = 1.0
+    ang_vel: float = 0.2
+    projected_gravity: float = 1.0
+    joint_pos: float = 1.0
+    joint_vel: float = 0.2
+    joint_torque: float = 10.0
+    fingertip_force: float = 10.0
+    fingertip_torque: float = 10.0
+
+@configclass
+@configclass
+class UnigrasptransformerNormalizationCfg:
+    obs_scales: GraspObsScaleCfg = GraspObsScaleCfg()
+    clip_observations: float | None = None
+    clip_actions: float | None = None
+
     

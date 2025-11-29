@@ -60,7 +60,9 @@ from legged_lab.envs.base.my_confg import(
     MySceneCfg,
     TableCfg,
     GraspObjectCfg,
-    GraspObsScaleCfg
+    GraspObjectGoalCfg,
+    GraspObsScaleCfg,
+    UnigrasptransformerNormalizationCfg
 )
 
 from legged_lab.envs.unigrasptransformer.helpers import(
@@ -139,6 +141,7 @@ class UnigraspTransformerSceneCfg(MySceneCfg):
     robot: ArticulationCfg = HAND_CFG
     table: TableCfg = TABLE_CFG
     grasp_object: GraspObjectCfg = GRASP_OBJECT_CFG
+    object_goal: GraspObjectGoalCfg = GraspObjectGoalCfg()
     
 @configclass
 class GraspRewardCfg:
@@ -163,6 +166,7 @@ class GraspRewardCfg:
     right_hand_pose = RewTerm(func=mdp.grasp_right_hand_pose, weight=WEIGHTS_CFG["right_hand_pose"])
 
     # paper placeholders (keep explicit)
+    # NOTE: currently not used
     rd = RewTerm(func=mdp.grasp_reward_rd, weight=WEIGHTS_CFG["rd"])
     ro = RewTerm(func=mdp.grasp_reward_ro, weight=WEIGHTS_CFG["ro"])
     rl = RewTerm(func=mdp.grasp_reward_rl, weight=WEIGHTS_CFG["rl"])
@@ -194,12 +198,8 @@ class UnigraspTransformerGraspEnv:
     domain_rand: DomainRandCfg = DomainRandCfg(action_delay=ActionDelayCfg(enable=False))
     noise: NoiseCfg = NoiseCfg(add_noise=False)
     # normalization clips observation and add noise to obs if enabled
-    normalization: NormalizationCfg = NormalizationCfg(
-        obs_scales=GraspObsScaleCfg(
-            # to be implemented
-        ),
-        clip_observations=5.0,
-        clip_actions=1.0,
+    normalization: UnigrasptransformerNormalizationCfg = UnigrasptransformerNormalizationCfg(
+        obs_scales=GraspObsScaleCfg(),
     )
     # ============================
     sim: SimCfg = SimCfg()
