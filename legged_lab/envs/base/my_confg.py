@@ -19,6 +19,11 @@ class DexHandCfg:
     actor_obs_history_length: int = 10
     critic_obs_history_length: int = 10
     action_scale: float = 0.25
+    use_relative_control: bool = False
+    dof_speed_scale: float = 20.0
+    transition_scale: float = 0.5
+    orientation_scale: float = 0.1
+    actions_moving_average: float | None = 1.0
     terminate_contacts_body_names: list = []
     asymmetric_obs: bool = False
 

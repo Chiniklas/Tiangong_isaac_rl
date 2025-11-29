@@ -107,6 +107,7 @@ class UniGraspTransformerEnv(VecEnv):
         self.robot_default_root_state = self.robot.data.root_state_w.clone()
         self.robot_default_joint_pos = self.robot.data.default_joint_pos.clone()
         self.robot_zero_joint_vel = torch.zeros_like(self.robot.data.joint_vel)
+        self.identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
 
         ## object related initialization
         self.object = self.scene["object"]
@@ -200,6 +201,7 @@ class UniGraspTransformerEnv(VecEnv):
         self.clip_actions = self.cfg.normalization.clip_actions
         self.clip_obs = self.cfg.normalization.clip_observations
         self.action_scale = self.cfg.robot.action_scale
+        self.actions_moving_average = getattr(self.cfg.robot, "actions_moving_average", None)
 
         ## Action buffer initialization
         # Action delay buffer to optionally inject latency between issued and applied actions.
@@ -502,7 +504,8 @@ class UniGraspTransformerEnv(VecEnv):
         if actions.shape[1] != num_act:
             raise ValueError(f"action dimension mismatch: expected {num_act}, got {actions.shape[1]}")
         else:
-            print("action dim matches for step")
+            pass
+            # print("action dimensions match expected size for step")
 
         # actions should already be normalized to [-1, 1]
         if torch.any(actions > 1.0) or torch.any(actions < -1.0):
@@ -631,6 +634,8 @@ class UniGraspTransformerEnv(VecEnv):
         """
         use_relative = getattr(self.cfg.robot, "use_relative_control", False)
         dof_speed_scale = getattr(self.cfg.robot, "dof_speed_scale", 1.0)
+        transition_scale = getattr(self.cfg.robot, "transition_scale", 1.0)
+        orientation_scale = getattr(self.cfg.robot, "orientation_scale", 1.0)
 
         wrist = action[:, :6]
         finger = action[:, 6:]
@@ -639,6 +644,16 @@ class UniGraspTransformerEnv(VecEnv):
         default_finger_pos = self.robot.data.default_joint_pos[:, -18:]
         joint_lower = getattr(self.robot.data, "joint_lower_limits", None)
         joint_upper = getattr(self.robot.data, "joint_upper_limits", None)
+        has_limits = joint_lower is not None and joint_upper is not None
+
+        # reorient and scale wrist wrench similar to upstream (pose_vec + gains).
+        pose_quat = getattr(self, "pose_z_theta_quat", self.identity_quat)
+        # forces/torques are scaled by dt and gains to match original magnitude mapping.
+        wrist_force = wrist[:, :3] * self.step_dt * transition_scale * 100000.0
+        wrist_torque = wrist[:, 3:6] * self.step_dt * orientation_scale * 1000.0
+        wrist_force = quat_apply(pose_quat, wrist_force)
+        wrist_torque = quat_apply(pose_quat, wrist_torque)
+        wrist_wrench = torch.cat([wrist_force, wrist_torque], dim=-1)
 
         if use_relative:
             # integrate deltas
@@ -647,13 +662,22 @@ class UniGraspTransformerEnv(VecEnv):
             delta = finger * dof_speed_scale * self.step_dt
             joint_targets = self.prev_joint_targets + delta
             # clamp if limits available
-            if joint_lower is not None and joint_upper is not None:
+            if has_limits:
                 joint_targets = torch.clamp(joint_targets, joint_lower[:, -18:], joint_upper[:, -18:])
             self.prev_joint_targets = joint_targets.detach()
         else:
-            # direct targets around defaults with action_scale
-            joint_targets = finger * self.action_scale + default_finger_pos
-            if joint_lower is not None and joint_upper is not None:
+            # map normalized actions to joint limits (upstream uses scale to [lower, upper])
+            if has_limits:
+                span = joint_upper[:, -18:] - joint_lower[:, -18:]
+                joint_targets = 0.5 * (finger + 1.0) * span + joint_lower[:, -18:]
+                if self.actions_moving_average is not None:
+                    prev = self.prev_joint_targets if hasattr(self, "prev_joint_targets") else default_finger_pos
+                    joint_targets = (
+                        self.actions_moving_average * joint_targets
+                        + (1.0 - self.actions_moving_average) * prev
+                    )
                 joint_targets = torch.clamp(joint_targets, joint_lower[:, -18:], joint_upper[:, -18:])
+            else:
+                joint_targets = finger * self.action_scale + default_finger_pos
 
-        return wrist, joint_targets
+        return wrist_wrench, joint_targets
