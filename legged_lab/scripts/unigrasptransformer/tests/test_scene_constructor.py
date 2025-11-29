@@ -106,22 +106,26 @@ def main():
     # print(f"  - robot DOF count: {robot.num_dof}")
     # print(f"  - object exists: {obj is not None}")
 
-
-    # implement controllers
     # simple zero-action controller
     zero_action = torch.zeros(env.num_envs, 24, device=env.device)
 
+    # random action controller within [-0.5, 0.5]
+    action_low, action_high = -0.5, 0.5
+    def sample_action():
+        return torch.empty(env.num_envs, 24, device=env.device).uniform_(action_low, action_high)
+    current_action = sample_action()
+    print("initial action:", current_action)
+
     step_i = 0
-    print("current action:", zero_action)
-    print("current step", step_i)
     run_forever = args.steps < 0
     while run_forever or step_i < args.steps:
         # advance through the env API to exercise action/obs/reward paths
-        actor_obs, reward, reset, extras = env.step(zero_action)
+        actor_obs, reward, reset, extras = env.step(current_action)
         if step_i % 10 == 0:
             print(f"[step {step_i}] reward={reward[:1].cpu().numpy()}")
+        current_action = sample_action()
         step_i += 1
-        input()
+        # input()
 
     env.close()
     simulation_app.close()

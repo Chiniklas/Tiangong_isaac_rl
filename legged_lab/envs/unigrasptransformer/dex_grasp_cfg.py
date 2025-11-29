@@ -134,7 +134,7 @@ HAND_CFG = _build_hand_cfg(DEFAULT_HAND_SPAWN, SHADOW_HAND_CFG)
 @configclass
 class UnigraspTransformerSceneCfg(MySceneCfg):
     """This is where you instantiate your custom scene cfg"""
-    max_episode_length_s: float = 20.0
+    max_episode_length_s: float = 10.0
     num_envs: int = 4096
     env_spacing: float = 2.5
     seed: int = 42 # at training runtime, the scene seed comes from the agent
@@ -179,7 +179,7 @@ class GraspRewardCfg:
 class UnigraspTransformerGraspEnv:
     device: str = "cuda:0"
     scene: UnigraspTransformerSceneCfg = UnigraspTransformerSceneCfg(
-        max_episode_length_s=20.0,
+        max_episode_length_s=1.0,
         num_envs=4096,
         env_spacing=2.5,
         robot=HAND_CFG, # this robot is for scene generation

@@ -103,16 +103,26 @@ class UniGraspTransformerEnv(VecEnv):
         self.fingertip_ids, _ = self.robot.find_bodies(
             name_keys=["fftip", "mftip", "rftip", "lftip", "thtip"], preserve_order=True
         )
+        # Cache default states for clean resets.
+        self.robot_default_root_state = self.robot.data.root_state_w.clone()
+        self.robot_default_joint_pos = self.robot.data.default_joint_pos.clone()
+        self.robot_zero_joint_vel = torch.zeros_like(self.robot.data.joint_vel)
 
         ## object related initialization
         self.object = self.scene["object"]
+        self.object_default_root_state = self.object.data.root_state_w.clone()
+        self.object_zero_vel = torch.zeros_like(self.object.data.root_state_w[:, 7:13])
         # Goal pose
         self.goal_object = self.scene["object_goal"]
         self.goal_states = self.goal_object.data.root_state_w  # (E, 13)
         self.goal_pos = self.goal_states[:, 0:3]
         self.goal_rot = self.goal_states[:, 3:7]
+        if self.goal_object is not None:
+            self.goal_default_root_state = self.goal_object.data.root_state_w.clone()
         # initialization of hand points and object pc; refreshed each step from stage
         self.refresh_stage_points()
+
+
 
         print("DEBUGGING data extraction")
         ## DEBUGGING robot related data
@@ -435,19 +445,15 @@ class UniGraspTransformerEnv(VecEnv):
     def reset(self, env_ids):
         if len(env_ids) == 0:
             return
+        print(f"Resetting envs: {env_ids.tolist()}")
+        # input()
 
         # Reset buffer
         self.extras["log"] = dict()
 
-        # TODO: mirror upstream UniGraspTransformer reset:
-        # - Randomize goal pose / target pose (goal_env_ids handling)
-        # - Sample grasp priors / target hand poses if available
-        # - Reset hand DOF state/targets to defaults (with optional noise)
-        # - Restore saved root states for hand/object/table
-        # - Apply random object yaw and align hand orientation (optionally to PCA)
-        # - Apply static init states if configured
-
         self.scene.reset(env_ids)
+        #  just resets the scene manager’s bookkeeping and actors to whatever state it currently holds
+
         if "reset" in self.event_manager.available_modes:
             self.event_manager.apply(
                 mode="reset",
@@ -455,6 +461,24 @@ class UniGraspTransformerEnv(VecEnv):
                 dt=self.step_dt,
                 global_env_step_count=self.sim_step_counter // self.cfg.sim.decimation,
             )
+
+        # Restore hand pose and joint state to defaults after scene/events.
+        self.robot.write_root_state_to_sim(self.robot_default_root_state[env_ids], env_ids)
+        self.robot.write_joint_position_to_sim(self.robot_default_joint_pos[env_ids])
+        self.robot.write_joint_velocity_to_sim(self.robot_zero_joint_vel[env_ids])
+        self.prev_action[env_ids] = torch.zeros_like(self.prev_action[env_ids])
+        if hasattr(self, "prev_joint_targets"):
+            self.prev_joint_targets[env_ids] = self.robot_default_joint_pos[env_ids, -18:]
+
+        # Restore object and goal states to defaults (zero velocities).
+        obj_state = self.object_default_root_state[env_ids].clone()
+        obj_state[:, 7:13] = self.object_zero_vel[env_ids]
+        self.object.data.root_state_w[env_ids] = obj_state
+        if self.goal_object is not None:
+            goal_state = self.goal_default_root_state[env_ids].clone()
+            goal_state[:, 7:13] = 0.0
+            self.goal_object.data.root_state_w[env_ids] = goal_state
+
 
         reward_extras = self.reward_manager.reset(env_ids)
         self.extras["log"].update(reward_extras)
@@ -465,6 +489,7 @@ class UniGraspTransformerEnv(VecEnv):
         self.action_buffer.reset(env_ids)
         self.episode_length_buf[env_ids] = 0
 
+        
         self.scene.write_data_to_sim()
         self.sim.forward()
 
@@ -528,36 +553,32 @@ class UniGraspTransformerEnv(VecEnv):
         self.episode_length_buf += 1
         reward_buf = self.reward_manager.compute(self.step_dt)
 
-        self.reset_buf = None
-        self.time_out_buf = None
-        # self.reset_buf, self.time_out_buf = self.check_reset()
-        # self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-        # self.reset(self.reset_env_ids)
+        # currently only rely on timeout reset
+        self.reset_buf, self.time_out_buf = self.check_reset()
+        self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        self.reset(self.reset_env_ids)
 
         # refresh stage-derived object point cloud and hand points each control step
         self.refresh_stage_points()
 
+        # get observation calculation
         actor_obs, critic_obs = self.compute_observations()
         self.extras["observations"] = {"critic": critic_obs}
 
         return actor_obs, reward_buf, self.reset_buf, self.extras
 
     def check_reset(self):
-        net_contact_forces = self.contact_sensor.data.net_forces_w_history
+        # TODO: mirror upstream UniGraspTransformer reset:
+        # - Randomize goal pose / target pose (goal_env_ids handling)
+        # - Sample grasp priors / target hand poses if available
+        # - Reset hand DOF state/targets to defaults (with optional noise)
+        # - Restore saved root states for hand/object/table
+        # - Apply random object yaw and align hand orientation (optionally to PCA)
+        # - Apply static init states if configured
 
-        reset_buf = torch.any(
-            torch.max(
-                torch.norm(
-                    net_contact_forces[:, :, self.termination_contact_cfg.body_ids],
-                    dim=-1,
-                ),
-                dim=1,
-            )[0]
-            > 1.0,
-            dim=1,
-        )
-        time_out_buf = self.episode_length_buf >= self.max_episode_length
-        reset_buf |= time_out_buf
+        # Only reset on timeout; ignore contact force thresholds.
+        reset_buf = self.episode_length_buf >= self.max_episode_length
+        time_out_buf = reset_buf
         return reset_buf, time_out_buf
 
     def init_obs_buffer(self):
