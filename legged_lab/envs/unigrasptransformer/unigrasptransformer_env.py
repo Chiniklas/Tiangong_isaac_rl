@@ -20,19 +20,13 @@ import isaaclab.sim as sim_utils
 import isaacsim.core.utils.torch as torch_utils  # type: ignore
 import numpy as np
 import torch
-from pathlib import Path
-from typing import Any, Dict
 from isaaclab.assets.articulation import Articulation
-from isaaclab.envs.mdp.commands import UniformVelocityCommand, UniformVelocityCommandCfg
 from isaaclab.managers import EventManager, RewardManager
 from isaaclab.managers.scene_entity_cfg import SceneEntityCfg
 from isaaclab.scene import InteractiveScene
-from isaaclab.sensors import ContactSensor, RayCaster
-from isaaclab.sensors.camera import TiledCamera
 from isaaclab.sim import PhysxCfg, SimulationContext
 from isaaclab.utils.buffers import CircularBuffer, DelayBuffer
-from isaaclab.utils.math import quat_apply, quat_conjugate, quat_rotate
-from scipy.spatial.transform import Rotation
+from isaaclab.utils.math import quat_apply
 
 from legged_lab.envs.unigrasptransformer.dex_grasp_cfg import UnigraspTransformerGraspEnv
 from legged_lab.utils.env_utils.unigrasptransformer_scene import UniGraspSceneCfg
@@ -40,6 +34,7 @@ from rsl_rl.env import VecEnv
 from legged_lab.envs.unigrasptransformer.helpers import (
     _load_yaml_cfg,
     compute_time_encoding,
+    quat_from_euler_xyz,
     quat_to_euler_xyz,
     batch_sided_distance,
     get_point_cloud_world,
@@ -103,11 +98,18 @@ class UniGraspTransformerEnv(VecEnv):
         self.fingertip_ids, _ = self.robot.find_bodies(
             name_keys=["fftip", "mftip", "rftip", "lftip", "thtip"], preserve_order=True
         )
+        # palm/wrist body (upstream applies wrench here)
+        palm_ids, _ = self.robot.find_bodies(name_keys=["palm"], preserve_order=True)
+        self.palm_body_id = int(palm_ids[0]) if len(palm_ids) > 0 else 1
         # Cache default states for clean resets.
         self.robot_default_root_state = self.robot.data.root_state_w.clone()
         self.robot_default_joint_pos = self.robot.data.default_joint_pos.clone()
         self.robot_zero_joint_vel = torch.zeros_like(self.robot.data.joint_vel)
         self.identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+        # Per-env repose angle around z (mirrors upstream UniGrasp handling of random yaw);
+        # used to rotate wrist wrench into the posed frame when available.
+        self.z_theta = torch.zeros(self.num_envs, device=self.device)
+        self.pose_z_theta_quat = self.identity_quat.clone()
 
         ## object related initialization
         self.object = self.scene["object"]
@@ -123,14 +125,14 @@ class UniGraspTransformerEnv(VecEnv):
         # initialization of hand points and object pc; refreshed each step from stage
         self.refresh_stage_points()
 
+        # TODO: set object and hand initial pose and position (upstream places hand at a default pose,
+        #       sets object to an init state, optionally rotates by a sampled prior yaw, zeroes velocities;
+        #       no free-fall drop by default).
 
 
         print("DEBUGGING data extraction")
         ## DEBUGGING robot related data
         print(self.robot)
-        # general robot debugs
-        # print(self.robot.__dict__)  # internal refs
-        # print(dir(self.robot))      # method/attr names
         # robot data debugs
         print(self.robot.data.__dict__.keys())
         # print(self.robot.data.root_state_w)
@@ -138,23 +140,6 @@ class UniGraspTransformerEnv(VecEnv):
         print("Joint order:", self.joint_names)
         self.body_names = list(self.robot.data.body_names)
         print("body order:", [f"{i}:{name}" for i, name in enumerate(self.body_names)])
-        # # adopt UniGrasp-style valid body selection by name (order matters)
-        # preferred_valid_names = [
-        #     "palm",
-        #     "ffproximal", "ffmiddle", "ffdistal",
-        #     "mfproximal", "mfmiddle", "mfdistal",
-        #     "rfknuckle", "rfmiddle", "rfdistal",
-        #     "lfmetacarpal", "lfknuckle", "lfmiddle", "lfdistal",
-        #     "thbase", "thhub", "thdistal",
-        # ]
-        # self.valid_body_indices = [i for name in preferred_valid_names for i, n in enumerate(self.body_names) if n == name]
-        # self.valid_body_names = [self.body_names[i] for i in self.valid_body_indices]
-        # # skip offsets within the valid list (mirror original 2,5,8,12 skips)
-        # self.skip_body_offsets = [2, 5, 8, 12]
-        # self.left_out_body_indices = [self.valid_body_indices[i] for i in self.skip_body_offsets if i < len(self.valid_body_indices)]
-        # print("valid bodies (indices):", self.valid_body_indices)
-        # print("left-out bodies (indices):", self.left_out_body_indices) # should be all the finger middle part
-
         ## DEBUGGING object related data
         # print(self.object)
         # print(self.pc)
@@ -259,167 +244,90 @@ class UniGraspTransformerEnv(VecEnv):
 
     def compute_current_observations(self):
         # TODO: check each observation domain to make sure they have the right reading
-        # Observation terms breakdown (all currently included; some are placeholders until wired):
-        #  1- proprioception (167)
-        #     wrist position(3) and rotation Euler(3)
-        #     Finger-joint angle(22), angular velocity(22) and force(22)
-        #     Fingertip position(5*3), quaternion rotation(5*4), linear velocity(5*3), angular velocity(5*3), force(5*3) and torque(5*3)
-        #  2-Previous action (24)
-        #     wrist force(3) and torque(3); finger-joint angles(18)
-        #  3-Object state (16)
-        #     Object center(3), quaternion rotation(4), linear velocity(3), angular velocity(3), object-goal distance(3)
-        #  4-(Optional)Object PCA (9)
-        #     3x3 PCA axes flattened
-        #  5-(Optional)Object visual (128)
-        #     point-cloud feature vector (zero until wired)
-        #  6-Hand-Object Distance (36)
-        #     hand body points to object point cloud distances
-        #  7-Time (29)
-        #     current time(1), sine-cosine time embedding(28)
+        # Observation terms (mirrors upstream ordering/lengths; many are zeros/placeholders until sensors/encoders are wired):
+        #  hand_dofs (66): 22 joint pos, 22 joint vel, 22 joint force (zeros)
+        #  hand_fingers (95): fingertip pos/quat/linvel/angvel for 5 tips (5*13), fingertip force/torque (zeros, 5*6)
+        #  hand_states (6): wrist pos (3) + wrist euler (3)
+        #  actions (24): previous action (wrist wrench + finger targets)
+        #  objects (16): object pos/quat/linvel/angvel + goal delta
+        #  object_visual (64): placeholder zeros
+        #  times (29): step count + sinusoidal encoding (optional)
+        #  hand_objects (36): hand point cloud to object distances (padded/truncated)
 
-        # TODO: Object scalings not clear
-        ## get raw data
+        # TODO: obs unpose and scaling
         robot_data = self.robot.data
         object_data = self.object.data
-        prev_action = self.prev_action # extract previous action
 
-        #==================================================================================================
-        # 1- building propriosection obs
-        wrist_pos = robot_data.root_state_w[:, 0:3]
-        wrist_rot_quat = robot_data.root_state_w[:, 3:7]
-        wrist_rot_euler_xyz = quat_to_euler_xyz(wrist_rot_quat)  # convert quat (xyzw) to Euler xyz
-
+        # hand_dofs
         joint_angle = robot_data.joint_pos[:, :22]
         joint_vel = robot_data.joint_vel[:, :22]
-        # TODO:joint force sensors need to be added
         joint_force = torch.zeros_like(joint_vel)
-        # joint_force = self.robot.data.measured_joint_force()
-        
-        body_state = self.robot.data.body_state_w  # (E, B, 13)
-        fingertip_pos = body_state[:, self.fingertip_ids, 0:3].reshape(self.num_envs, -1)  # (E, 5*3)
-        fingertip_rot = body_state[:, self.fingertip_ids, 3:7].reshape(self.num_envs, -1)  # (E, 5*4)
-        fingertip_lin_vel = body_state[:, self.fingertip_ids, 7:10].reshape(self.num_envs, -1)  # (E, 5*3)
-        fingertip_ang_vel = body_state[:, self.fingertip_ids, 10:13].reshape(self.num_envs, -1)  # (E, 5*3)
-        
-        # TODO: fingertip_force and torque can not be acquired by contact sensors, still working on how to solve it.
-        fingertip_force = torch.zeros((self.num_envs, 5 * 3), device=self.device)
-        fingertip_torque = torch.zeros((self.num_envs, 5 * 3), device=self.device)
-        proprio = torch.cat(
-            [
-                wrist_pos,
-                wrist_rot_euler_xyz,
-                joint_angle,
-                joint_vel,
-                joint_force,
-                fingertip_pos,
-                fingertip_rot,
-                fingertip_lin_vel,
-                fingertip_ang_vel,
-                fingertip_force,
-                fingertip_torque,
-            ],
-            dim=-1,
-        )
+        hand_dofs = torch.cat([joint_angle, joint_vel, joint_force], dim=-1)
 
-        #==================================================================================================
-        # 2- building previous action observations
-        # previous action: 6 wrist wrench + 18 finger targets
-        prev_wrist_force = prev_action[:,:3]
-        prev_wrist_torque = prev_action[:,3:6]
-        prev_finger_angles = prev_action[:,6:]
-        prev_action_state = torch.cat([prev_wrist_force, 
-                                 prev_wrist_torque, 
-                                 prev_finger_angles], 
-                                 dim=-1)
+        # hand_fingers
+        body_state = robot_data.body_state_w  # (E, B, 13)
+        fingertip_state = body_state[:, self.fingertip_ids, 0:13].reshape(self.num_envs, -1)  # 5*13
+        fingertip_force_torque = torch.zeros((self.num_envs, 5 * 6), device=self.device)
+        hand_fingers = torch.cat([fingertip_state, fingertip_force_torque], dim=-1)
 
-        #==================================================================================================
-        # 3- building object state obs
-        # object pose/velocity in world frame
+        # hand_states
+        wrist_pos = robot_data.root_state_w[:, 0:3]
+        wrist_rot_euler_xyz = quat_to_euler_xyz(robot_data.root_state_w[:, 3:7])
+        hand_states = torch.cat([wrist_pos, wrist_rot_euler_xyz], dim=-1)
+
+        # previous actions (cached)
+        actions = self.prev_action
+
+        # objects
         obj_center = object_data.root_state_w[:, 0:3]
         obj_quat = object_data.root_state_w[:, 3:7]
         obj_lin_vel = object_data.root_state_w[:, 7:10]
         obj_ang_vel = object_data.root_state_w[:, 10:13]
-        # Goal pose and distance to object center (if goal actor exists).
         if self.goal_object is not None:
-            self.goal_states = self.goal_object.data.root_state_w  # (E, 13)
+            self.goal_states = self.goal_object.data.root_state_w
             self.goal_pos = self.goal_states[:, 0:3]
             self.goal_rot = self.goal_states[:, 3:7]
             obj_goal_dist = self.goal_pos - obj_center
         else:
             obj_goal_dist = torch.zeros((self.num_envs, 3), device=self.device)
-        object_state = torch.cat(
-            [obj_center,
-             obj_quat, 
-             obj_lin_vel, 
-             obj_ang_vel, 
-             obj_goal_dist],
-            dim=-1,
-        )
-        #==================================================================================================
-        # 4-(Optional)building propriosection obs
-        # Optional observation domains (placeholders to match upstream structure).
-        object_pca = torch.zeros((self.num_envs, 9), device=self.device)          # 3x3 PCA axes
+        objects = torch.cat([obj_center, obj_quat, obj_lin_vel, obj_ang_vel, obj_goal_dist], dim=-1)
+        if getattr(self, "zero_object_state", False):
+            objects = torch.zeros_like(objects)
 
-        #==================================================================================================
-        # 5-(Optional)Object visual (128)
-        object_visual = torch.zeros((self.num_envs, 128), device=self.device)     # visual features placeholder
+        # optional PCA block
+        object_pca = None
+        if getattr(self, "encode_object_pca_obs", False):
+            object_pca = torch.zeros((self.num_envs, 9), device=self.device)
 
-        #==================================================================================================
-        # 6- building hand object distance obs
-        ## extract hand points and point cloud from the stage, and calculate distance
-        # it seems the original unigrasptransformer hardcoded the interesting body indexes
-        # from the original mjcf, the body index looks like this:
-        """
-        0 hand mount, 1 palm, 2 ffknuckle, 3 ffproximal, 4 ffmiddle, 
-        5 ffdistal, 6 mfknuckle, 7 mfproximal, 8 mfmiddle, 9 mfdistal, 
-        10 rfknuckle, 11 rfproximal, 12 rfmiddle, 13 rfdistal, 14 lfmetacarpal, 
-        15 lfknuckle, 16 lfproximal, 17 lfmiddle, 18 lfdistal, 19 thbase, 
-        20 thproximal, 21 thhub, 22 thmiddle, 23 thdistal
-        """
-        # and they pick: valid_shadow_hand_bodies = [1,3,4,5,7,8,9,10,12,13,14,15,17,18,19,21,23] to add normal offsets
-        # and for 2,5,8,12, they apply special offsets
+        # object_visual placeholder: upstream code actually allocates 128-D (PointNet feature) but their hardcoded num_obs comment still says 64;
+        # here we keep a 64-D zero block until a visual encoder is wired. (upstream legacy feature)
+        object_visual = torch.zeros((self.num_envs, 64), device=self.device)
+        if getattr(self, "zero_object_visual_feature", False):
+            object_visual = torch.zeros_like(object_visual)
 
-        # in our usd, the body order is:
-        """
-        body order: ['0:world', '1:palm', '2:ffknuckle', '3:lfmetacarpal', '4:mfknuckle', '5:rfknuckle', '6:thbase', '7:palm_center_marker', '8:ffproximal', '9:lfknuckle', '10:mfproximal', '11:rfproximal', '12:thproximal', '13:palm_dir_marker', '14:ffmiddle', '15:lfproximal', '16:mfmiddle', '17:rfmiddle', '18:thhub', '19:ffdistal', '20:lfmiddle', '21:mfdistal', '22:rfdistal', '23:thmiddle', '24:fftip', '25:lfdistal', '26:mftip', '27:rftip', '28:thdistal', '29:lftip', '30:thtip']
-        valid bodies (indices): [1, 8, 14, 19, 10, 16, 21, 5, 17, 22, 3, 9, 20, 25, 6, 18, 28]
-        left-out bodies (indices): [14, 16, 17, 20]
-        """
-
-        # get hand body points from stage at runtime
-        hand_body_pos = self.hand_points
-        # get object point data from stage at runtime
-        object_pc = self.object_points
-        # calculate hand object distance
-        hand_object_dist = batch_sided_distance(hand_body_pos, object_pc).view(self.num_envs, -1)
-
-        #==================================================================================================
-        # 7- building time embedding obs
-        # one thing could happen is that our physics step and control step are not at the same frequency
-        # we now set the decimation to 1, so no downsampling
-        current_time = self.episode_length_buf.unsqueeze(-1).float()
-        time_sin_cos = compute_time_encoding(self.episode_length_buf.float(), 28)
-        time_embed = torch.cat([current_time, 
-                                time_sin_cos], 
-                                dim=-1)
-
-        # ==========================================================================
-        # form final observation tensor (mirror upstream ordering: hand, action, object(+pca), visual, time, hand-object)
-        obs_parts = [
-            proprio,
-            prev_action_state,
-            object_state,
-        ]
-        # gate PCA block like upstream encode_obj_pca
-        if self.encode_object_pca_obs:
+        # time embedding
+        obs_parts = [hand_dofs, hand_fingers, hand_states, actions, objects]
+        if object_pca is not None:
             obs_parts.append(object_pca)
-        obs_parts.append(object_visual)  # always allocated; zero until visual features are wired
+        obs_parts.append(object_visual)
         if self.encode_time_embed:
+            current_time = self.episode_length_buf.unsqueeze(-1).float()
+            time_sin_cos = compute_time_encoding(self.episode_length_buf.float(), 28)
+            time_embed = torch.cat([current_time, time_sin_cos], dim=-1)
             obs_parts.append(time_embed)
+
+        # hand-object distances (pad/truncate to 36 to mirror upstream default)
         if self.encode_hand_object_dist:
+            hand_body_pos = self.hand_points
+            object_pc = self.object_points
+            hand_object_dist = batch_sided_distance(hand_body_pos, object_pc).view(self.num_envs, -1)
+            if hand_object_dist.shape[1] < 36:
+                pad = torch.zeros((self.num_envs, 36 - hand_object_dist.shape[1]), device=self.device)
+                hand_object_dist = torch.cat([hand_object_dist, pad], dim=-1)
+            elif hand_object_dist.shape[1] > 36:
+                hand_object_dist = hand_object_dist[:, :36]
             obs_parts.append(hand_object_dist)
-        # ==========================================================================
-        # NOTE:it is possible for the critic observation to be larger than actor observation because you add privileged information to that 
+
         current_actor_obs = torch.cat(obs_parts, dim=-1)
         if not self.cfg.robot.asymmetric_obs:
             current_critic_obs = current_actor_obs
@@ -468,6 +376,9 @@ class UniGraspTransformerEnv(VecEnv):
         self.robot.write_root_state_to_sim(self.robot_default_root_state[env_ids], env_ids)
         self.robot.write_joint_position_to_sim(self.robot_default_joint_pos[env_ids])
         self.robot.write_joint_velocity_to_sim(self.robot_zero_joint_vel[env_ids])
+        # Initialize repose yaw (upstream derives from sampled prior; here default to zero) and update pose quat.
+        self.z_theta[env_ids] = 0.0
+        self.update_pose_quat()
         self.prev_action[env_ids] = torch.zeros_like(self.prev_action[env_ids])
         if hasattr(self, "prev_joint_targets"):
             self.prev_joint_targets[env_ids] = self.robot_default_joint_pos[env_ids, -18:]
@@ -481,7 +392,11 @@ class UniGraspTransformerEnv(VecEnv):
             goal_state[:, 7:13] = 0.0
             self.goal_object.data.root_state_w[env_ids] = goal_state
 
+        # TODO: reset goal pose to initial pose or randomized pose
 
+        # TODO: reset internal targets: prev_targets/cur_targets
+
+        # clear buffers
         reward_extras = self.reward_manager.reset(env_ids)
         self.extras["log"].update(reward_extras)
         self.extras["time_outs"] = self.time_out_buf
@@ -506,12 +421,6 @@ class UniGraspTransformerEnv(VecEnv):
         else:
             pass
             # print("action dimensions match expected size for step")
-
-        # actions should already be normalized to [-1, 1]
-        if torch.any(actions > 1.0) or torch.any(actions < -1.0):
-            raise ValueError("received unnormalized actions; expected values within [-1, 1]")
-        else:
-            print("input action normalization ok")
         
         # splitting into wrist action and joint action
         wrist_wrench, finger_targets = self.calculate_real_action(actions) # action modes(direct or relative) is already considered about in the calculate_real_action()
@@ -526,7 +435,7 @@ class UniGraspTransformerEnv(VecEnv):
             dtype=torch.long,
         )
 
-        # apply wrist wrench on the root link (body id 0) in the global frame
+        # apply wrist wrench on the palm (match upstream body index)
         forces = torch.zeros((self.num_envs, 1, 3), device=self.device)
         torques = torch.zeros((self.num_envs, 1, 3), device=self.device)
         forces[:, 0, :] = wrist_wrench[:, :3]
@@ -537,7 +446,9 @@ class UniGraspTransformerEnv(VecEnv):
         for _ in range(self.cfg.sim.decimation):
             self.sim_step_counter += 1
             # apply force and torque control on the palm
-            self.robot.set_external_force_and_torque(forces=forces, torques=torques, body_ids=[0], is_global=True)
+            self.robot.set_external_force_and_torque(
+                forces=forces, torques=torques, body_ids=[self.palm_body_id], is_global=True
+            )
             # apply position control on the joints
             self.robot.set_joint_position_target(finger_targets, joint_ids=finger_joint_ids)
             self.scene.write_data_to_sim()
@@ -571,17 +482,24 @@ class UniGraspTransformerEnv(VecEnv):
         return actor_obs, reward_buf, self.reset_buf, self.extras
 
     def check_reset(self):
-        # TODO: mirror upstream UniGraspTransformer reset:
-        # - Randomize goal pose / target pose (goal_env_ids handling)
-        # - Sample grasp priors / target hand poses if available
-        # - Reset hand DOF state/targets to defaults (with optional noise)
-        # - Restore saved root states for hand/object/table
-        # - Apply random object yaw and align hand orientation (optionally to PCA)
-        # - Apply static init states if configured
+        """
+        Reset conditions placeholder.
+        TODO: get upstream reset conditions
+        Currently: only timeouts trigger resets.
+        """
+        # Placeholders for future flags (currently disabled).
+        reach_goal = False  # set True when goal tolerance is reached
+        success = False     # set True when success criteria are met
+        current_success = False
+        consecutive_success = False
 
-        # Only reset on timeout; ignore contact force thresholds.
-        reset_buf = self.episode_length_buf >= self.max_episode_length
-        time_out_buf = reset_buf
+        # goal based reset: object goal distance within a threshold
+        goal_reset_buf = torch.zeros_like(self.episode_length_buf, dtype=torch.bool)
+        if reach_goal:
+            goal_reset_buf[:] = True
+
+        time_out_buf = self.episode_length_buf >= self.max_episode_length
+        reset_buf = time_out_buf | goal_reset_buf
         return reset_buf, time_out_buf
 
     def init_obs_buffer(self):
@@ -623,6 +541,21 @@ class UniGraspTransformerEnv(VecEnv):
         except ModuleNotFoundError:
             pass
         return torch_utils.set_seed(seed)
+
+    def update_pose_quat(self):
+        """
+        Build per-env pose quaternion from z-axis yaw (matches upstream UniGrasp "repose" handling).
+
+        This rotates the wrist wrench into the posed frame; if z_theta is unset, falls back to identity.
+        """
+        if hasattr(self, "z_theta") and self.z_theta is not None:
+            self.pose_z_theta_quat = quat_from_euler_xyz(
+                torch.zeros_like(self.z_theta),
+                torch.zeros_like(self.z_theta),
+                self.z_theta,
+            )
+        else:
+            self.pose_z_theta_quat = self.identity_quat
     
     def calculate_real_action(self, action):
         """
@@ -649,8 +582,9 @@ class UniGraspTransformerEnv(VecEnv):
         # reorient and scale wrist wrench similar to upstream (pose_vec + gains).
         pose_quat = getattr(self, "pose_z_theta_quat", self.identity_quat)
         # forces/torques are scaled by dt and gains to match original magnitude mapping.
-        wrist_force = wrist[:, :3] * self.step_dt * transition_scale * 100000.0
-        wrist_torque = wrist[:, 3:6] * self.step_dt * orientation_scale * 1000.0
+        # Use physics dt (not control step dt) to mirror upstream scaling.
+        wrist_force = wrist[:, :3] * self.physics_dt * transition_scale * 100000.0
+        wrist_torque = wrist[:, 3:6] * self.physics_dt * orientation_scale * 1000.0
         wrist_force = quat_apply(pose_quat, wrist_force)
         wrist_torque = quat_apply(pose_quat, wrist_torque)
         wrist_wrench = torch.cat([wrist_force, wrist_torque], dim=-1)

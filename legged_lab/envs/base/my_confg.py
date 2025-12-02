@@ -26,6 +26,12 @@ class DexHandCfg:
     actions_moving_average: float | None = 1.0
     terminate_contacts_body_names: list = []
     asymmetric_obs: bool = False
+    # observation gating (mirror upstream Modes)
+    encode_obj_pca: bool = False
+    encode_obs_time: bool = True
+    encode_hand_object_dist: bool = True
+    zero_object_state: bool = False
+    zero_object_visual_feature: bool = False
 
 
 @configclass

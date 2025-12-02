@@ -63,6 +63,22 @@ def quat_to_euler_xyz(quat: torch.Tensor) -> torch.Tensor:
     return torch.stack((roll, pitch, yaw), dim=-1)
 
 
+def quat_from_euler_xyz(roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
+    """Convert Euler XYZ angles to quaternion (xyzw)."""
+    cr = torch.cos(roll * 0.5)
+    sr = torch.sin(roll * 0.5)
+    cp = torch.cos(pitch * 0.5)
+    sp = torch.sin(pitch * 0.5)
+    cy = torch.cos(yaw * 0.5)
+    sy = torch.sin(yaw * 0.5)
+
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+    return torch.stack([x, y, z, w], dim=-1)
+
+
 def batch_sided_distance(sources: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """Compute sided distance from sources (Nenv, Ns, 3) to nearest target (Nenv, Nt, 3)."""
     pairwise_distances = torch.cdist(sources, targets)
