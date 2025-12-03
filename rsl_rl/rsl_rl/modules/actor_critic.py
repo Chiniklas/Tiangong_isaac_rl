@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import math
 import torch
 import torch.nn as nn
 from torch.distributions import Normal
@@ -127,6 +128,22 @@ class ActorCritic(nn.Module):
             std = torch.exp(self.log_std).expand_as(mean)
         else:
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
+        # Keep std finite and non-negative to avoid torch.normal runtime errors if optimizer drives it invalid.
+        std = torch.nan_to_num(std, nan=1e-6, posinf=1e6, neginf=1e-6)
+        std = torch.abs(std)
+        std = torch.clamp(std, min=1e-6, max=1e6)
+        if (std <= 0).any() or not torch.isfinite(std).all():
+            std = torch.full_like(std, 1e-6)
+        # Repair parameter tensors if they have drifted into invalid ranges.
+        if self.noise_std_type == "scalar":
+            with torch.no_grad():
+                self.std.data = torch.abs(self.std.data)
+                self.std.data = torch.clamp(
+                    torch.nan_to_num(self.std.data, nan=1e-6, posinf=1e6, neginf=1e-6), min=1e-6, max=1e6
+                )
+        elif self.noise_std_type == "log":
+            with torch.no_grad():
+                self.log_std.data = torch.nan_to_num(self.log_std.data, nan=math.log(1e-6), posinf=math.log(1e6), neginf=math.log(1e-6))
         # create distribution
         self.distribution = Normal(mean, std)
 

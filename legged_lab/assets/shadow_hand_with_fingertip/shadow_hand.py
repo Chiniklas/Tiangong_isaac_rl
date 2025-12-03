@@ -62,6 +62,25 @@ TARGET_INIT_JOINT_POS: Dict[str, float] = {
     "THJ1": 0.0,
 }
 
+VALID_LINKS = [1,7,8,9,12,13,14,16,18,19,21,22,24,25,27,29,31]
+# 1: palm
+# 7: ffproximal
+# 8: ffmiddle
+# 9: ffdistal
+# 12: mfproximal
+# 13: mfmiddle
+# 14: mfdistal
+# 16: rfknuckle
+# 18: rfmiddle
+# 19: rfdistal
+# 21: lfmetacarpal
+# 22: lfknuckle
+# 24: lfmiddle
+# 25: lfdistal
+# 27: thbase
+# 29: thhub
+# 31: thdistal
+
 REFERENCE_PD = {
     # values roughly aligned with UniGrasp dex grasp specs
     "stiffness": 1.0,
